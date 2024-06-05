@@ -1,10 +1,9 @@
-import torch
-import torch.nn as nn
-import torch.optim as optim
-
 import argparse
 import pymimir as mm
 import random
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 from collections import defaultdict
 from pathlib import Path
@@ -147,6 +146,22 @@ def _create_device():
         device = torch.device("cpu")
         print("GPU is not available. Using CPU.")
     return device
+
+
+def _save_checkpoint(model: SmoothmaxRelationalNeuralNetwork, optimizer: optim.Adam, path: str):
+    model_dict, hparams_dict = model.get_state_and_hparams_dicts()
+    checkpoint = { 'model': model_dict, 'hparams': hparams_dict, 'optimizer': optimizer.state_dict() }
+    torch.save(checkpoint, path)
+
+
+def _load_checkpoint(path: str):
+    checkpoint = torch.load(path)
+    hparams_dict = checkpoint['hparams']
+    model = SmoothmaxRelationalNeuralNetwork(hparams_dict['predicates'], hparams_dict['embedding_size'], hparams_dict['num_layers'])
+    model.load_state_dict(checkpoint['model'])
+    optimizer = optim.Adam(model.parameters())
+    optimizer.load_state_dict(checkpoint['optimizer'])
+    return model, optimizer
 
 
 def _train(model: SmoothmaxRelationalNeuralNetwork, train_dataset: StateSpaceDataset, validation_dataset: StateSpaceDataset, num_epochs: int) -> None:

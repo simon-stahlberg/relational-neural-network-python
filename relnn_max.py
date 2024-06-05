@@ -100,9 +100,14 @@ class SmoothmaxRelationalNeuralNetwork(nn.Module):
         super().__init__()
         predicates.sort()  # Ensure that relations are always processed in the same order
         self._predicates = predicates
+        self._embedding_size = embedding_size
+        self._num_layers = num_layers
         self._module = RelationalMessagePassingModule(predicates, embedding_size, num_layers)
         self._readout = SumReadout(embedding_size, 1)
 
     def forward(self, relations: Dict[str, torch.Tensor], batch_sizes: List[int]) -> torch.Tensor:
         object_embeddings = self._module(relations, batch_sizes)
         return self._readout(object_embeddings, batch_sizes)
+
+    def get_state_and_hparams_dicts(self):
+        return self.state_dict(), { 'predicates': self._predicates, 'embedding_size': self._embedding_size, 'num_layers': self._num_layers }
