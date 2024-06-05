@@ -1,4 +1,3 @@
-import math
 import torch
 import torch.nn as nn
 
@@ -13,8 +12,6 @@ class MLP(nn.Module):
         self.output_size = output_size
         self._inner = nn.Linear(input_size, input_size, True)
         self._outer = nn.Linear(input_size, output_size, True)
-        torch.nn.init.orthogonal_(self._inner.weight, math.sqrt(2))
-        torch.nn.init.constant_(self._inner.bias, 0.0)
 
     def forward(self, input):
         return self._outer(mish(self._inner(input)))
@@ -39,7 +36,7 @@ class RelationMessagePassing(nn.Module):
             if relation_name in relations:
                 relation_values = relations[relation_name]
                 input_embeddings = torch.index_select(object_embeddings, 0, relation_values).view(-1, relation_module.input_size)
-                output_messages = relation_module(input_embeddings).view(-1, self._embedding_size)
+                output_messages = (input_embeddings + relation_module(input_embeddings)).view(-1, self._embedding_size)
                 output_messages_list.append(output_messages)
                 output_indices_list.append(relation_values)
         output_messages = torch.cat(output_messages_list, 0)
@@ -62,8 +59,8 @@ class SumReadout(nn.Module):
         super().__init__()
         self._value = MLP(input_size, output_size)
 
-    def forward(self, object_embeddings: torch.Tensor, batch_sizes: List[int]) -> torch.Tensor:
-        cumsum_indices = torch.tensor(batch_sizes, device=object_embeddings.device).cumsum(0) - 1
+    def forward(self, object_embeddings: torch.Tensor, batch_sizes: torch.Tensor) -> torch.Tensor:
+        cumsum_indices = batch_sizes.cumsum(0) - 1
         cumsum_states = object_embeddings.cumsum(0).index_select(0, cumsum_indices)
         aggregated_embeddings = torch.cat((cumsum_states[0].view(1, -1), cumsum_states[1:] - cumsum_states[0:-1]))
         return self._value(aggregated_embeddings)
@@ -80,7 +77,7 @@ class RelationalMessagePassingModule(nn.Module):
     def get_device(self):
         return self._dummy.device
 
-    def forward(self, relations: Dict[str, torch.Tensor], batch_sizes: List[int]) -> torch.Tensor:
+    def forward(self, relations: Dict[str, torch.Tensor], batch_sizes: torch.Tensor) -> torch.Tensor:
         object_embeddings = self._initialize_nodes(sum(batch_sizes))
         object_embeddings = self._pass_messages(object_embeddings, relations)
         return object_embeddings
@@ -105,7 +102,7 @@ class SmoothmaxRelationalNeuralNetwork(nn.Module):
         self._module = RelationalMessagePassingModule(predicates, embedding_size, num_layers)
         self._readout = SumReadout(embedding_size, 1)
 
-    def forward(self, relations: Dict[str, torch.Tensor], batch_sizes: List[int]) -> torch.Tensor:
+    def forward(self, relations: Dict[str, torch.Tensor], batch_sizes: torch.Tensor) -> torch.Tensor:
         object_embeddings = self._module(relations, batch_sizes)
         return self._readout(object_embeddings, batch_sizes)
 

@@ -5,25 +5,17 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from collections import defaultdict
 from pathlib import Path
 from relnn_max import SmoothmaxRelationalNeuralNetwork
 from typing import Dict, List, Tuple, Union
+from utils import create_device, save_checkpoint, load_checkpoint
 
 
-class StateSpaceDataset:
-    def __init__(self, state_spaces: List[mm.StateSpace], num_items: int) -> None:
+class StateSampler:
+    def __init__(self, state_spaces: List[mm.StateSpace]) -> None:
         self._state_spaces = state_spaces
-        self._num_items = num_items
 
-    def __len__(self) -> int:
-        # We assume that the size of the dataset is 'self._num_items'.
-        # This ensures predictable epoch lengths, regardless of the size of the given state spaces.
-        # In the getitem method, we randomly sample states instead of systematically enumerating them.
-        return self._num_items
-
-    def __getitem__(self, ignored_index) -> Tuple[mm.State, mm.StateSpace, int]:
-        # We ignore the index and return a random state.
+    def sample(self) -> Tuple[mm.State, mm.StateSpace, int]:
         # To achieve an even distribution, we uniformly sample a state space and select a valid goal-distance within that space.
         # Finally, we randomly sample a state from the selected state space and with the goal-distance.
         state_space_index = random.randint(0, len(self._state_spaces) - 1)
@@ -41,7 +33,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument('--model', default=None, type=Path, help='Path to a pre-trained model to continue training from')
     parser.add_argument('--embedding_size', default=32, type=int, help='Dimension of the embedding vector for each object')
     parser.add_argument('--layers', default=30, type=int, help='Number of layers in the model')
-    parser.add_argument('--batch_size', default=32, type=int, help='Number of samples per batch')
+    parser.add_argument('--batch_size', default=64, type=int, help='Number of samples per batch')
     parser.add_argument('--learning_rate', default=0.0002, type=float, help='Learning rate for the training process')
     parser.add_argument('--num_epochs', default=1_000, type=int, help='Number of epochs for the training process')
     args = parser.parse_args()
@@ -75,19 +67,21 @@ def _generate_state_spaces(domain_path: str, problem_paths: List[str]) -> List[m
     return state_spaces
 
 
-def _create_datasets(state_spaces: List[mm.StateSpace]) -> Tuple[StateSpaceDataset, StateSpaceDataset]:
-    print('Create datasets...')
+def _create_state_samplers(state_spaces: List[mm.StateSpace]) -> Tuple[StateSampler, StateSampler]:
+    print('Creating state samplers...')
     train_size = int(len(state_spaces) * 0.8)
     train_state_spaces = state_spaces[:train_size]
     validation_state_spaces = state_spaces[train_size:]
-    train_dataset = StateSpaceDataset(train_state_spaces, 10_000)
-    validation_dataset = StateSpaceDataset(validation_state_spaces, 1_000)
+    train_dataset = StateSampler(train_state_spaces)
+    validation_dataset = StateSampler(validation_state_spaces)
     return train_dataset, validation_dataset
 
 
 def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int) -> nn.Module:
     predicates = domain.get_static_predicates() + domain.get_fluent_predicates() + domain.get_derived_predicates()
-    relation_name_arities = [(predicate.get_name(), len(predicate.get_parameters())) for predicate in predicates]
+    relation_name_arities = [('relation_' + predicate.get_name(), len(predicate.get_parameters())) for predicate in predicates]
+    relation_name_arities.extend([('relation_' + predicate.get_name() + '_goal_true', len(predicate.get_parameters())) for predicate in predicates])
+    relation_name_arities.extend([('relation_' + predicate.get_name() + '_goal_false', len(predicate.get_parameters())) for predicate in predicates])
     model = SmoothmaxRelationalNeuralNetwork(relation_name_arities, embedding_size, num_layers)
     return model
 
@@ -111,92 +105,99 @@ def _get_goal(state_space: mm.StateSpace) -> List[Union[mm.StaticGroundAtom, mm.
     return full_goal
 
 
-def _group_term_ids_by_predicate_name(state_atoms: List[Union[mm.StaticGroundAtom, mm.FluentGroundAtom, mm.DerivedGroundAtom]],
-                                      goal_atoms: List[Union[mm.StaticGroundAtom, mm.FluentGroundAtom, mm.DerivedGroundAtom]]) -> Dict[str, List[int]]:
-    groups = defaultdict(list)
-    for atom in state_atoms:
-        predicate_name = atom.get_predicate().get_name()
-        term_ids = [term.get_identifier() for term in atom.get_objects()]
-        groups[predicate_name].extend(term_ids)
-    for atom in goal_atoms:
-        predicate_name = atom.get_predicate().get_name()
-        term_ids = [term.get_identifier() for term in atom.get_objects()]
-        groups[predicate_name + '_goal'].extend(term_ids)
-    return groups
-
-
-def _term_id_groups_to_tensors(term_id_groups: Dict[str, List[int]], device: torch.device) -> Dict[str, torch.Tensor]:
+def _relations_to_tensors(term_id_groups: Dict[str, List[int]], device: torch.device) -> Dict[str, torch.Tensor]:
     result = {}
     for key, value in term_id_groups.items():
         result[key] = torch.tensor(value, dtype=torch.int, device=device, requires_grad=False)
     return result
 
 
-def _add_value_to_term_ids_in_group(group: Dict[str, List[int]], value: int) -> None:
-    for terms in group.values():
-        for index in range(len(terms)):
-            terms[index] += value
-
-
-def _create_device():
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        print("GPU is available. Using GPU:", torch.cuda.get_device_name(0))
-    else:
-        device = torch.device("cpu")
-        print("GPU is not available. Using CPU.")
-    return device
-
-
-def _save_checkpoint(model: SmoothmaxRelationalNeuralNetwork, optimizer: optim.Adam, path: str):
-    model_dict, hparams_dict = model.get_state_and_hparams_dicts()
-    checkpoint = { 'model': model_dict, 'hparams': hparams_dict, 'optimizer': optimizer.state_dict() }
-    torch.save(checkpoint, path)
-
-
-def _load_checkpoint(path: str):
-    checkpoint = torch.load(path)
-    hparams_dict = checkpoint['hparams']
-    model = SmoothmaxRelationalNeuralNetwork(hparams_dict['predicates'], hparams_dict['embedding_size'], hparams_dict['num_layers'])
-    model.load_state_dict(checkpoint['model'])
-    optimizer = optim.Adam(model.parameters())
-    optimizer.load_state_dict(checkpoint['optimizer'])
-    return model, optimizer
-
-
-def _train(model: SmoothmaxRelationalNeuralNetwork, train_dataset: StateSpaceDataset, validation_dataset: StateSpaceDataset, num_epochs: int) -> None:
-    device = _create_device()
-    model = model.to(device)
-    state, state_space, goal_distance = train_dataset[0]
-    num_objects = len(state_space.get_problem().get_objects())
+def _sample_state_to_batch(batch_relations: Dict[str, List[int]], batch_sizes: List[int], batch_targets: List[int], states: StateSampler):
+    state, state_space, target_value = states.sample()
+    id_offset = sum(batch_sizes)
     state_atoms = _get_atoms(state, state_space)
     goal_atoms = _get_goal(state_space)
-    term_id_groups = _group_term_ids_by_predicate_name(state_atoms, goal_atoms)
-    input = _term_id_groups_to_tensors(term_id_groups, device)
+    for atom in state_atoms:
+        predicate_name = 'relation_' + atom.get_predicate().get_name()
+        term_ids = [term.get_identifier() + id_offset for term in atom.get_objects()]
+        if predicate_name not in batch_relations: batch_relations[predicate_name] = term_ids
+        else: batch_relations[predicate_name].extend(term_ids)
+    for atom in goal_atoms:
+        predicate_name = ('relation_' + atom.get_predicate().get_name() + '_goal') + ('_true' if state.contains(atom) else '_false')
+        term_ids = [term.get_identifier() + id_offset for term in atom.get_objects()]
+        if predicate_name not in batch_relations: batch_relations[predicate_name] = term_ids
+        else: batch_relations[predicate_name].extend(term_ids)
+    batch_sizes.append(len(state_space.get_problem().get_objects()))
+    batch_targets.append(target_value)
+
+
+def _sample_batch(states: StateSampler, batch_size: int, device: torch.device) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    batch_relations = {}
+    batch_sizes = []
+    batch_targets = []
+    for _ in range(batch_size):
+        _sample_state_to_batch(batch_relations, batch_sizes, batch_targets, states)
+    batch_relation_tensors = _relations_to_tensors(batch_relations, device)
+    batch_size_tensor = torch.tensor(batch_sizes, dtype=torch.int, device=device, requires_grad=False)
+    batch_target_tensor = torch.tensor(batch_targets, dtype=torch.float, device=device, requires_grad=False)
+    return batch_relation_tensors, batch_size_tensor, batch_target_tensor
+
+
+def _train(model: SmoothmaxRelationalNeuralNetwork, train_states: StateSampler, validation_states: StateSampler, num_epochs: int, batch_size: int) -> None:
+    device = create_device()
+    model = model.to(device)
+    # While we can sample states on the fly from the state spaces, this creates
+    # a significant overhead because the states need to be translated to the
+    # correct format and transferred to the GPU. Instead, we sample a fixed
+    # number of states and move them to the GPU before training. This approach
+    # increases GPU utilization.
+    print('Creating datasets...')
+    train_dataset = [_sample_batch(train_states, batch_size, device) for _ in range(10_000)]
+    validation_dataset = [_sample_batch(validation_states, batch_size, device) for _ in range(1_000)]
     # Training loop
-    criterion = nn.MSELoss()
+    best_validation_loss = None  # Track the best validation loss to detect overfitting.
     optimizer = optim.Adam(model.parameters(), lr=0.0002)
+    print('Training model...')
     for epoch in range(0, num_epochs):
-        # Forward pass
-        output = model(input, [num_objects]).view(-1)
-        target = torch.tensor([goal_distance], dtype=torch.float, device=device)
-        loss: torch.Tensor = criterion(output, target)
-        # Backward pass and optimization
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        # Print loss every 100 epochs
-        if (epoch + 1) % 100 == 0: print(f'[{epoch + 1}/{num_epochs}] Loss: {loss.item():.4f}')
-    pass
+        # Train step
+        for index, (relations, sizes, targets) in enumerate(train_dataset):
+            # Forward pass
+            predictions = model.forward(relations, sizes).view(-1)
+            loss = (predictions - targets).abs().mean()  # MAE
+            # loss = (predictions - targets).square().mean()  # MSE
+            # loss = (predictions - targets).square().mean().sqrt()  # RMSE
+            # Backward pass and optimization
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            # Print loss every 100 steps (printing every step forces synchronization with CPU)
+            if (index + 1) % 100 == 0:
+                print(f'[{epoch + 1}/{num_epochs}; {index + 1}/{len(train_dataset)}] Loss: {loss.item():.4f}')
+        # Validation step
+        with torch.no_grad():
+            total_square_error = torch.zeros([1], dtype=torch.float, device=device)
+            total_absolute_error = torch.zeros([1], dtype=torch.float, device=device)
+            for index, (relations, sizes, targets) in enumerate(validation_dataset):
+                predictions = model.forward(relations, sizes).view(-1)
+                total_square_error += (predictions - targets).square().sum()
+                total_absolute_error += (predictions - targets).abs().sum()
+            total_samples = len(validation_dataset) * batch_size
+            validation_loss = total_absolute_error / total_samples
+            print(f'[{epoch + 1}/{num_epochs}] Validation loss: {validation_loss.item():.4f}')
+            if (best_validation_loss is None) or (validation_loss < best_validation_loss):
+                best_validation_loss = validation_loss
+                save_checkpoint(model, optimizer, "best.pth")
+                print(f'[{epoch + 1}/{num_epochs}] Saved new best model')
 
 
 def _main(args: argparse.Namespace) -> None:
+    print(f'Torch: {torch.__version__}')
     domain_path, problem_paths = _parse_instances(args.input)
     state_spaces = _generate_state_spaces(domain_path, problem_paths)
-    train_dataset, validation_dataset = _create_datasets(state_spaces)
+    train_dataset, validation_dataset = _create_state_samplers(state_spaces)
     domain = state_spaces[0].get_problem().get_domain()
     model = _create_model(domain, args.embedding_size, args.layers)
-    _train(model, train_dataset, validation_dataset, args.num_epochs)
+    _train(model, train_dataset, validation_dataset, args.num_epochs, args.batch_size)
 
 
 if __name__ == "__main__":
