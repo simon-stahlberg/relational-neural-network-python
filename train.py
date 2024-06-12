@@ -7,8 +7,8 @@ import torch.optim as optim
 
 from pathlib import Path
 from relnn_max import SmoothmaxRelationalNeuralNetwork
-from typing import Dict, List, Tuple, Union
-from utils import create_device, save_checkpoint, load_checkpoint
+from typing import Dict, List, Tuple
+from utils import create_device, get_atom_name, get_atoms, get_goal, get_predicate_name, relations_to_tensors, save_checkpoint, load_checkpoint
 
 
 class StateSampler:
@@ -79,68 +79,39 @@ def _create_state_samplers(state_spaces: List[mm.StateSpace]) -> Tuple[StateSamp
 
 def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, device: torch.device) -> nn.Module:
     predicates = domain.get_static_predicates() + domain.get_fluent_predicates() + domain.get_derived_predicates()
-    relation_name_arities = [('relation_' + predicate.get_name(), len(predicate.get_parameters())) for predicate in predicates]
-    relation_name_arities.extend([('relation_' + predicate.get_name() + '_goal_true', len(predicate.get_parameters())) for predicate in predicates])
-    relation_name_arities.extend([('relation_' + predicate.get_name() + '_goal_false', len(predicate.get_parameters())) for predicate in predicates])
+    relation_name_arities = [(get_predicate_name(predicate, False, True), len(predicate.get_parameters())) for predicate in predicates]
+    relation_name_arities.extend([(get_predicate_name(predicate, True, True), len(predicate.get_parameters())) for predicate in predicates])
+    relation_name_arities.extend([(get_predicate_name(predicate, True, False), len(predicate.get_parameters())) for predicate in predicates])
     model = SmoothmaxRelationalNeuralNetwork(relation_name_arities, embedding_size, num_layers).to(device)
     return model
 
 
-def _get_atoms(state: mm.State, state_space: mm.StateSpace) -> List[Union[mm.StaticGroundAtom, mm.FluentGroundAtom, mm.DerivedGroundAtom]]:
-    problem = state_space.get_problem()
-    factories = state_space.get_factories()
-    static_atoms = [literal.get_atom() for literal in problem.get_static_initial_literals()]
-    fluent_atoms = factories.get_fluent_ground_atoms_from_ids(state.get_fluent_atoms())
-    derived_atoms = factories.get_derived_ground_atoms_from_ids(state.get_derived_atoms())
-    all_atoms = static_atoms + fluent_atoms + derived_atoms
-    return all_atoms
-
-
-def _get_goal(state_space: mm.StateSpace) -> List[Union[mm.StaticGroundAtom, mm.FluentGroundAtom, mm.DerivedGroundAtom]]:
-    problem = state_space.get_problem()
-    static_goal = [literal.get_atom() for literal in problem.get_static_goal_condition()]
-    fluent_goal = [literal.get_atom() for literal in problem.get_fluent_goal_condition()]
-    derived_goal = [literal.get_atom() for literal in problem.get_derived_goal_condition()]
-    full_goal = static_goal + fluent_goal + derived_goal
-    return full_goal
-
-
-def _relations_to_tensors(term_id_groups: Dict[str, List[int]], device: torch.device) -> Dict[str, torch.Tensor]:
-    result = {}
-    for key, value in term_id_groups.items():
-        result[key] = torch.tensor(value, dtype=torch.int, device=device, requires_grad=False)
-    return result
-
-
-def _sample_state_to_batch(batch_relations: Dict[str, List[int]], batch_sizes: List[int], batch_targets: List[int], states: StateSampler):
-    state, state_space, target_value = states.sample()
-    id_offset = sum(batch_sizes)
-    state_atoms = _get_atoms(state, state_space)
-    goal_atoms = _get_goal(state_space)
-    for atom in state_atoms:
-        predicate_name = 'relation_' + atom.get_predicate().get_name()
-        term_ids = [term.get_identifier() + id_offset for term in atom.get_objects()]
-        if predicate_name not in batch_relations: batch_relations[predicate_name] = term_ids
-        else: batch_relations[predicate_name].extend(term_ids)
-    for atom in goal_atoms:
-        predicate_name = ('relation_' + atom.get_predicate().get_name() + '_goal') + ('_true' if state.contains(atom) else '_false')
-        term_ids = [term.get_identifier() + id_offset for term in atom.get_objects()]
-        if predicate_name not in batch_relations: batch_relations[predicate_name] = term_ids
-        else: batch_relations[predicate_name].extend(term_ids)
-    batch_sizes.append(len(state_space.get_problem().get_objects()))
-    batch_targets.append(target_value)
+def _sample_state_to_batch(relations: Dict[str, List[int]], sizes: List[int], targets: List[int], states: StateSampler):
+    state, state_space, target = states.sample()
+    offset = sum(sizes)
+    # Helper function for populating relations and sizes.
+    def add_relations(atom, is_goal_atom):
+        predicate_name = get_atom_name(atom, state, is_goal_atom)
+        term_ids = [term.get_identifier() + offset for term in atom.get_objects()]
+        if predicate_name not in relations: relations[predicate_name] = term_ids
+        else: relations[predicate_name].extend(term_ids)
+    # Add state to relations and sizes, together with the goal.
+    for atom in get_atoms(state, state_space.get_problem(), state_space.get_factories()): add_relations(atom, False)
+    for atom in get_goal(state_space.get_problem()): add_relations(atom, True)
+    sizes.append(len(state_space.get_problem().get_objects()))
+    targets.append(target)
 
 
 def _sample_batch(states: StateSampler, batch_size: int, device: torch.device) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
-    batch_relations = {}
-    batch_sizes = []
-    batch_targets = []
+    relations = {}
+    sizes = []
+    targets = []
     for _ in range(batch_size):
-        _sample_state_to_batch(batch_relations, batch_sizes, batch_targets, states)
-    batch_relation_tensors = _relations_to_tensors(batch_relations, device)
-    batch_size_tensor = torch.tensor(batch_sizes, dtype=torch.int, device=device, requires_grad=False)
-    batch_target_tensor = torch.tensor(batch_targets, dtype=torch.float, device=device, requires_grad=False)
-    return batch_relation_tensors, batch_size_tensor, batch_target_tensor
+        _sample_state_to_batch(relations, sizes, targets, states)
+    relation_tensors = relations_to_tensors(relations, device)
+    size_tensor = torch.tensor(sizes, dtype=torch.int, device=device, requires_grad=False)
+    target_tensor = torch.tensor(targets, dtype=torch.float, device=device, requires_grad=False)
+    return relation_tensors, size_tensor, target_tensor
 
 
 def _train(model: SmoothmaxRelationalNeuralNetwork,
@@ -166,9 +137,18 @@ def _train(model: SmoothmaxRelationalNeuralNetwork,
         for index, (relations, sizes, targets) in enumerate(train_dataset):
             # Forward pass
             predictions = model.forward(relations, sizes).view(-1)
-            loss = (predictions - targets).abs().mean()  # MAE
-            # loss = (predictions - targets).square().mean()  # MSE
-            # loss = (predictions - targets).square().mean().sqrt()  # RMSE
+            # The loss function has two parts: a standard absolute error loss
+            # and a distance loss. The distance loss compares the predicted
+            # values. Specifically, for two states, s and s', the loss states
+            # that |V(s) - V(s')| should equal |V*(s) - V*(s')|. This is done
+            # for all possible pairs of s and s' in the batch.
+            value_loss = (predictions - targets).abs().mean()
+            prediction_pairs = torch.cartesian_prod(predictions, predictions)
+            target_pairs = torch.cartesian_prod(targets, targets)
+            prediction_distances = (prediction_pairs[:, 0] - prediction_pairs[:, 1]).abs()
+            target_distances = (target_pairs[:, 0] - target_pairs[:, 1]).abs()
+            distance_loss = (prediction_distances - target_distances).abs().mean()
+            loss = value_loss + distance_loss
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()

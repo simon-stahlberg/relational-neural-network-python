@@ -59,8 +59,8 @@ class SumReadout(nn.Module):
         super().__init__()
         self._value = MLP(input_size, output_size)
 
-    def forward(self, object_embeddings: torch.Tensor, batch_sizes: torch.Tensor) -> torch.Tensor:
-        cumsum_indices = batch_sizes.cumsum(0) - 1
+    def forward(self, object_embeddings: torch.Tensor, sizes: torch.Tensor) -> torch.Tensor:
+        cumsum_indices = sizes.cumsum(0) - 1
         cumsum_states = object_embeddings.cumsum(0).index_select(0, cumsum_indices)
         aggregated_embeddings = torch.cat((cumsum_states[0].view(1, -1), cumsum_states[1:] - cumsum_states[0:-1]))
         return self._value(aggregated_embeddings)
@@ -77,8 +77,8 @@ class RelationalMessagePassingModule(nn.Module):
     def get_device(self):
         return self._dummy.device
 
-    def forward(self, relations: Dict[str, torch.Tensor], batch_sizes: torch.Tensor) -> torch.Tensor:
-        object_embeddings = self._initialize_nodes(sum(batch_sizes))
+    def forward(self, relations: Dict[str, torch.Tensor], sizes: torch.Tensor) -> torch.Tensor:
+        object_embeddings = self._initialize_nodes(sum(sizes))
         object_embeddings = self._pass_messages(object_embeddings, relations)
         return object_embeddings
 
@@ -102,9 +102,9 @@ class SmoothmaxRelationalNeuralNetwork(nn.Module):
         self._module = RelationalMessagePassingModule(predicates, embedding_size, num_layers)
         self._readout = SumReadout(embedding_size, 1)
 
-    def forward(self, relations: Dict[str, torch.Tensor], batch_sizes: torch.Tensor) -> torch.Tensor:
-        object_embeddings = self._module(relations, batch_sizes)
-        return self._readout(object_embeddings, batch_sizes)
+    def forward(self, relations: Dict[str, torch.Tensor], sizes: torch.Tensor) -> torch.Tensor:
+        object_embeddings = self._module(relations, sizes)
+        return self._readout(object_embeddings, sizes)
 
     def get_state_and_hparams_dicts(self):
         return self.state_dict(), { 'predicates': self._predicates, 'embedding_size': self._embedding_size, 'num_layers': self._num_layers }
