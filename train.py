@@ -77,12 +77,12 @@ def _create_state_samplers(state_spaces: List[mm.StateSpace]) -> Tuple[StateSamp
     return train_dataset, validation_dataset
 
 
-def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int) -> nn.Module:
+def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, device: torch.device) -> nn.Module:
     predicates = domain.get_static_predicates() + domain.get_fluent_predicates() + domain.get_derived_predicates()
     relation_name_arities = [('relation_' + predicate.get_name(), len(predicate.get_parameters())) for predicate in predicates]
     relation_name_arities.extend([('relation_' + predicate.get_name() + '_goal_true', len(predicate.get_parameters())) for predicate in predicates])
     relation_name_arities.extend([('relation_' + predicate.get_name() + '_goal_false', len(predicate.get_parameters())) for predicate in predicates])
-    model = SmoothmaxRelationalNeuralNetwork(relation_name_arities, embedding_size, num_layers)
+    model = SmoothmaxRelationalNeuralNetwork(relation_name_arities, embedding_size, num_layers).to(device)
     return model
 
 
@@ -143,9 +143,13 @@ def _sample_batch(states: StateSampler, batch_size: int, device: torch.device) -
     return batch_relation_tensors, batch_size_tensor, batch_target_tensor
 
 
-def _train(model: SmoothmaxRelationalNeuralNetwork, train_states: StateSampler, validation_states: StateSampler, num_epochs: int, batch_size: int) -> None:
-    device = create_device()
-    model = model.to(device)
+def _train(model: SmoothmaxRelationalNeuralNetwork,
+           optimizer: optim.Adam,
+           train_states: StateSampler,
+           validation_states: StateSampler,
+           num_epochs: int,
+           batch_size: int,
+           device: torch.device) -> None:
     # While we can sample states on the fly from the state spaces, this creates
     # a significant overhead because the states need to be translated to the
     # correct format and transferred to the GPU. Instead, we sample a fixed
@@ -156,7 +160,6 @@ def _train(model: SmoothmaxRelationalNeuralNetwork, train_states: StateSampler, 
     validation_dataset = [_sample_batch(validation_states, batch_size, device) for _ in range(1_000)]
     # Training loop
     best_validation_loss = None  # Track the best validation loss to detect overfitting.
-    optimizer = optim.Adam(model.parameters(), lr=0.0002)
     print('Training model...')
     for epoch in range(0, num_epochs):
         # Train step
@@ -192,12 +195,19 @@ def _train(model: SmoothmaxRelationalNeuralNetwork, train_states: StateSampler, 
 
 def _main(args: argparse.Namespace) -> None:
     print(f'Torch: {torch.__version__}')
+    device = create_device()
     domain_path, problem_paths = _parse_instances(args.input)
     state_spaces = _generate_state_spaces(domain_path, problem_paths)
     train_dataset, validation_dataset = _create_state_samplers(state_spaces)
     domain = state_spaces[0].get_problem().get_domain()
-    model = _create_model(domain, args.embedding_size, args.layers)
-    _train(model, train_dataset, validation_dataset, args.num_epochs, args.batch_size)
+    if args.model is None:
+        print('Creating a new model and optimizer...')
+        model = _create_model(domain, args.embedding_size, args.layers, device)
+        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    else:
+        print(f'Loading an existing model and optimizer... ({args.model})')
+        model, optimizer = load_checkpoint(args.model, device)
+    _train(model, optimizer, train_dataset, validation_dataset, args.num_epochs, args.batch_size, device)
 
 
 if __name__ == "__main__":
