@@ -26,7 +26,6 @@ class StateSampler:
         return (sampled_state, sampled_state_space, goal_distance)
 
 
-
 def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Settings for training')
     parser.add_argument('--input', required=True, type=Path, help='Path to the training dataset')
@@ -167,9 +166,10 @@ def _train(model: SmoothmaxRelationalNeuralNetwork,
             total_samples = len(validation_dataset) * batch_size
             validation_loss = total_absolute_error / total_samples
             print(f'[{epoch + 1}/{num_epochs}] Validation loss: {validation_loss.item():.4f}')
+            save_checkpoint(model, optimizer, 'latest.pth')
             if (best_validation_loss is None) or (validation_loss < best_validation_loss):
                 best_validation_loss = validation_loss
-                save_checkpoint(model, optimizer, "best.pth")
+                save_checkpoint(model, optimizer, 'best.pth')
                 print(f'[{epoch + 1}/{num_epochs}] Saved new best model')
 
 

@@ -58,14 +58,8 @@ def _main(args: argparse.Namespace) -> None:
     print(f'Loading model... ({args.model})')
     model, _ = load_checkpoint(args.model, device)
     solution = _plan(parser.get_problem(), parser.get_factories(), model, device)
-    if solution is None:
-        print('Failed to find a solution!')
-    else:
-        with open('plan.txt', 'w') as file:
-            file.write(f'; Plan length: {len(solution)}\n')
-            for action in solution:
-                file.write(f'{str(action)}\n')
-        print('Wrote plan.txt')
+    if solution is None: print('Failed to find a solution!')
+    else: print(f'Found a solution of length {len(solution)}!')
 
 
 if __name__ == '__main__':
