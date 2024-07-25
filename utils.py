@@ -45,11 +45,10 @@ def load_checkpoint(path: str, device: torch.device):
 
 
 def get_atoms(state: mm.State, problem: mm.Problem, factories: mm.PDDLFactories) -> List[Union[mm.StaticGroundAtom, mm.FluentGroundAtom, mm.DerivedGroundAtom]]:
-    static_atoms = [literal.get_atom() for literal in problem.get_static_initial_literals()]
-    fluent_atoms = factories.get_fluent_ground_atoms_from_ids(state.get_fluent_atoms())
-    derived_atoms = factories.get_derived_ground_atoms_from_ids(state.get_derived_atoms())
-    all_atoms = static_atoms + fluent_atoms + derived_atoms
-    return all_atoms
+    atoms = [literal.get_atom() for literal in problem.get_static_initial_literals()]
+    atoms.extend(factories.get_fluent_ground_atoms_from_ids(state.get_fluent_atoms()))
+    atoms.extend(factories.get_derived_ground_atoms_from_ids(state.get_derived_atoms()))
+    return atoms
 
 
 def get_goal(problem: mm.Problem) -> List[Union[mm.StaticGroundAtom, mm.FluentGroundAtom, mm.DerivedGroundAtom]]:

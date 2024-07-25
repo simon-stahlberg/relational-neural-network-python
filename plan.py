@@ -34,7 +34,7 @@ def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRela
     # Disable gradient as we are not optimizing.
     with torch.no_grad():
         aag = mm.LiftedAAG(problem, factories)
-        ssg = mm.SSG(aag)
+        ssg = mm.SuccessorStateGenerator(aag)
         current_state = ssg.get_or_create_initial_state()
         while (not is_goal_state(current_state)) and (len(solution) < 1_000):
             applicable_actions = aag.compute_applicable_actions(current_state)
