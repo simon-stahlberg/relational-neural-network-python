@@ -26,7 +26,7 @@ def _create_parser(input: Path) -> mm.PDDLParser:
     return mm.PDDLParser(domain_file, problem_file)
 
 
-def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRelationalNeuralNetwork, device: torch.device) -> Union[None, List[str]]:
+def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRelationalNeuralNetwork, device: torch.device) -> Union[None, List[mm.Action]]:
     solution = []
     # Helper function for testing is a state is a goal state.
     def is_goal_state(state: mm.State) -> bool:
@@ -46,7 +46,7 @@ def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRela
             min_action = applicable_actions[min_index]
             min_successor = successor_states[min_index]
             current_state = min_successor
-            solution.append(str(min_action))
+            solution.append(min_action)
             print(f'{min_value.item():.3f}: {min_action}')
     return solution if is_goal_state(current_state) else None
 
