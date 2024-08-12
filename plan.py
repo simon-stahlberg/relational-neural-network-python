@@ -33,12 +33,12 @@ def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRela
         return state.literals_hold(problem.get_fluent_goal_condition()) and state.literals_hold(problem.get_derived_goal_condition())
     # Disable gradient as we are not optimizing.
     with torch.no_grad():
-        aag = mm.LiftedAAG(problem, factories)
-        ssg = mm.SuccessorStateGenerator(aag)
-        current_state = ssg.get_or_create_initial_state()
+        successor_generator = mm.LiftedApplicableActionGenerator(problem, factories)
+        state_repository = mm.StateRepository(successor_generator)
+        current_state = state_repository.get_or_create_initial_state()
         while (not is_goal_state(current_state)) and (len(solution) < 1_000):
-            applicable_actions = aag.compute_applicable_actions(current_state)
-            successor_states = [ssg.get_or_create_successor_state(current_state, action) for action in applicable_actions]
+            applicable_actions = successor_generator.compute_applicable_actions(current_state)
+            successor_states = [state_repository.get_or_create_successor_state(current_state, action) for action in applicable_actions]
             relations, sizes = create_input(problem, successor_states, factories, device)
             output = model.forward(relations, sizes).view(-1)
             min_index = output.argmin()
@@ -57,7 +57,7 @@ def _main(args: argparse.Namespace) -> None:
     parser = _create_parser(args.input)
     print(f'Loading model... ({args.model})')
     model, _ = load_checkpoint(args.model, device)
-    solution = _plan(parser.get_problem(), parser.get_factories(), model, device)
+    solution = _plan(parser.get_problem(), parser.get_pddl_factories(), model, device)
     if solution is None:
         print('Failed to find a solution!')
     else:

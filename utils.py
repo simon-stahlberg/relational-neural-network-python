@@ -72,7 +72,7 @@ def create_input(problem: mm.Problem, states: List[mm.State], factories: mm.PDDL
     # Helper function for populating relations and sizes.
     def add_relations(atom, offset, is_goal_atom):
         predicate_name = get_atom_name(atom, state, is_goal_atom)
-        term_ids = [term.get_identifier() + offset for term in atom.get_objects()]
+        term_ids = [term.get_index() + offset for term in atom.get_objects()]
         if predicate_name not in relations: relations[predicate_name] = term_ids
         else: relations[predicate_name].extend(term_ids)
     # Add all states to relations and sizes, together with the goal.

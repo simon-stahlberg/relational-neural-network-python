@@ -22,8 +22,9 @@ class StateSampler:
         sampled_state_space = self._state_spaces[state_space_index]
         longest_distance = sampled_state_space.get_max_goal_distance()
         goal_distance = random.randint(0, longest_distance)
-        sampled_state = sampled_state_space.sample_state_with_goal_distance(goal_distance)
-        return (sampled_state, sampled_state_space, goal_distance)
+        sampled_state_index = sampled_state_space.sample_state_with_goal_distance(goal_distance)
+        sampled_state = sampled_state_space.get_state(sampled_state_index)
+        return (sampled_state.get_state(), sampled_state_space, goal_distance)
 
 
 def _parse_arguments() -> argparse.Namespace:
@@ -56,7 +57,7 @@ def _generate_state_spaces(domain_path: str, problem_paths: List[str]) -> List[m
     state_spaces: List[mm.StateSpace] = []
     for problem_path in problem_paths:
         print(f'> Expanding: {problem_path}')
-        state_space = mm.StateSpace.create(domain_path, problem_path, 1_000_000, 60_000)
+        state_space = mm.StateSpace.create(domain_path, problem_path, mm.StateSpaceOptions(max_num_states=1_000_000, timeout_ms=60_000))
         if state_space is not None:
             state_spaces.append(state_space)
             print(f'- # States: {state_space.get_num_states()}')
@@ -77,7 +78,10 @@ def _create_state_samplers(state_spaces: List[mm.StateSpace]) -> Tuple[StateSamp
 
 
 def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, device: torch.device) -> nn.Module:
-    predicates = domain.get_static_predicates() + domain.get_fluent_predicates() + domain.get_derived_predicates()
+    predicates = []
+    predicates.extend(domain.get_static_predicates())
+    predicates.extend(domain.get_fluent_predicates())
+    predicates.extend(domain.get_derived_predicates())
     relation_name_arities = [(get_predicate_name(predicate, False, True), len(predicate.get_parameters())) for predicate in predicates]
     relation_name_arities.extend([(get_predicate_name(predicate, True, True), len(predicate.get_parameters())) for predicate in predicates])
     relation_name_arities.extend([(get_predicate_name(predicate, True, False), len(predicate.get_parameters())) for predicate in predicates])
@@ -91,11 +95,11 @@ def _sample_state_to_batch(relations: Dict[str, List[int]], sizes: List[int], ta
     # Helper function for populating relations and sizes.
     def add_relations(atom, is_goal_atom):
         predicate_name = get_atom_name(atom, state, is_goal_atom)
-        term_ids = [term.get_identifier() + offset for term in atom.get_objects()]
+        term_ids = [term.get_index() + offset for term in atom.get_objects()]
         if predicate_name not in relations: relations[predicate_name] = term_ids
         else: relations[predicate_name].extend(term_ids)
     # Add state to relations and sizes, together with the goal.
-    for atom in get_atoms(state, state_space.get_problem(), state_space.get_factories()): add_relations(atom, False)
+    for atom in get_atoms(state, state_space.get_problem(), state_space.get_pddl_factories()): add_relations(atom, False)
     for atom in get_goal(state_space.get_problem()): add_relations(atom, True)
     sizes.append(len(state_space.get_problem().get_objects()))
     targets.append(target)
