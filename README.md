@@ -115,3 +115,25 @@ Found a solution of length 46!
 In the output, the selected action is printed along with the predicted value of the resulting successor state.
 Here, the network predicted the final solution would require at least 49 steps, but it ended up taking 46 steps.
 If a plan is found, it is also printed at the end.
+
+It is also possible to use the learned model as a heuristic function for A*:
+
+```
+$ python3 search.py --model example/blocks.pth --input example/blocks/test/probBLOCKS-17-0.pddl
+Torch: 2.3.0+cu121
+GPU is available. Using GPU: NVIDIA GeForce RTX 3090
+Creating parser...
+Loading model... (example/blocks.pth)
+[f = 50.755] Expanded: 0; Generated: 0
+[Final] Expanded: 50; Generated: 338
+Solved using 46 actions
+1: (unstack l f)
+2: (put-down l)
+3: (unstack g d)
+...
+44: (stack n l)
+45: (pick-up q)
+46: (stack q n)
+```
+
+However, there is no way to batch, so the GPU may be underutilized.

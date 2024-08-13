@@ -25,16 +25,18 @@ class NeuralHeuristic(mm.IHeuristic):
 class AStarEventHandler(mm.AStarAlgorithmEventHandlerBase):
     def __init__(self, quiet = True):
         mm.AStarAlgorithmEventHandlerBase.__init__(self, quiet)
+        self.expanded_states = 0
+        self.generated_states = 0
 
-    def on_expand_state_impl(self, state: mm.State, problem: mm.Problem, pddl_factories: mm.PDDLFactories): pass
-    def on_generate_state_impl(self, state: mm.State, action: mm.GroundAction, problem: mm.Problem, pddl_factories: mm.PDDLFactories): pass
+    def on_expand_state_impl(self, state: mm.State, problem: mm.Problem, pddl_factories: mm.PDDLFactories): self.expanded_states += 1
+    def on_generate_state_impl(self, state: mm.State, action: mm.GroundAction, problem: mm.Problem, pddl_factories: mm.PDDLFactories): self.generated_states += 1
     def on_generate_state_relaxed_impl(self, state: mm.State, action: mm.GroundAction, problem: mm.Problem, pddl_factories: mm.PDDLFactories): pass
     def on_generate_state_not_relaxed_impl(self, state: mm.State, action: mm.GroundAction, problem: mm.Problem, pddl_factories: mm.PDDLFactories): pass
     def on_close_state_impl(self, state: mm.State, problem: mm.Problem, pddl_factories: mm.PDDLFactories): pass
-    def on_finish_f_layer_impl(self, f_value: float, num_expanded_states: int, num_generated_states: int): print(f'[{f_value:.3f}] Expanded: {num_expanded_states}; Generated: {num_generated_states}')
+    def on_finish_f_layer_impl(self, f_value: float, num_expanded_states: int, num_generated_states: int): print(f'[f = {f_value:.3f}] Expanded: {num_expanded_states}; Generated: {num_generated_states}')
     def on_prune_state_impl(self, state: mm.State, problem: mm.Problem, pddl_factories: mm.PDDLFactories): pass
     def on_start_search_impl(self, start_state: mm.State, problem: mm.Problem, pddl_factories: mm.PDDLFactories): pass
-    def on_end_search_impl(self): print('Search finished')
+    def on_end_search_impl(self): pass
     def on_solved_impl(self, ground_action_plan: List[mm.GroundAction]): pass
     def on_unsolvable_impl(self): pass
     def on_exhausted_impl(self): pass
@@ -72,6 +74,7 @@ def _main(args: argparse.Namespace) -> None:
     event_handler = AStarEventHandler(False)
     astar_search_algorithm = mm.AStarAlgorithm(lifted_aag, state_repository, neural_heuristic, event_handler)
     search_status, plan = astar_search_algorithm.find_solution()
+    print(f'[Final] Expanded: {event_handler.expanded_states}; Generated: {event_handler.generated_states}')
     if search_status == mm.SearchStatus.SOLVED:
         print(f'Solved using {len(plan)} actions')
         for index, action in enumerate(plan):
