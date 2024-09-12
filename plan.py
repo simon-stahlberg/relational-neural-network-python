@@ -26,7 +26,7 @@ def _create_parser(input: Path) -> mm.PDDLParser:
     return mm.PDDLParser(domain_file, problem_file)
 
 
-def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRelationalNeuralNetwork, device: torch.device) -> Union[None, List[mm.Action]]:
+def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRelationalNeuralNetwork, device: torch.device) -> Union[None, List[mm.GroundAction]]:
     solution = []
     # Helper function for testing is a state is a goal state.
     def is_goal_state(state: mm.State) -> bool:
@@ -47,7 +47,7 @@ def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRela
             min_successor = successor_states[min_index]
             current_state = min_successor
             solution.append(min_action)
-            print(f'{min_value.item():.3f}: {min_action}')
+            print(f'{min_value.item():.3f}: {min_action.to_string_for_plan(factories)}')
     return solution if is_goal_state(current_state) else None
 
 
@@ -57,13 +57,14 @@ def _main(args: argparse.Namespace) -> None:
     parser = _create_parser(args.input)
     print(f'Loading model... ({args.model})')
     model, _ = load_checkpoint(args.model, device)
-    solution = _plan(parser.get_problem(), parser.get_pddl_factories(), model, device)
+    factories = parser.get_pddl_factories()
+    solution = _plan(parser.get_problem(), factories, model, device)
     if solution is None:
         print('Failed to find a solution!')
     else:
         print(f'Found a solution of length {len(solution)}!')
         for index, action in enumerate(solution):
-            print(f'{index + 1}: {str(action)}')
+            print(f'{index + 1}: {str(action.to_string_for_plan(factories))}')
 
 
 if __name__ == '__main__':
