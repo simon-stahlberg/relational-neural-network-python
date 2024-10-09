@@ -100,11 +100,14 @@ class SmoothmaxRelationalNeuralNetwork(nn.Module):
         self._embedding_size = embedding_size
         self._num_layers = num_layers
         self._module = RelationalMessagePassingModule(predicates, embedding_size, num_layers)
-        self._readout = SumReadout(embedding_size, 1)
+        self._value_readout = SumReadout(embedding_size, 1)
+        self._deadend_readout = SumReadout(embedding_size, 1)
 
-    def forward(self, relations: Dict[str, torch.Tensor], sizes: torch.Tensor) -> torch.Tensor:
+    def forward(self, relations: Dict[str, torch.Tensor], sizes: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         object_embeddings = self._module(relations, sizes)
-        return self._readout(object_embeddings, sizes)
+        value = self._value_readout(object_embeddings, sizes).view(-1)
+        deadend = self._deadend_readout(object_embeddings, sizes).view(-1)
+        return value, deadend
 
     def get_state_and_hparams_dicts(self):
         return self.state_dict(), { 'predicates': self._predicates, 'embedding_size': self._embedding_size, 'num_layers': self._num_layers }

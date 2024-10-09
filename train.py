@@ -14,15 +14,32 @@ from utils import create_device, get_atom_name, get_atoms, get_goal, get_predica
 class StateSampler:
     def __init__(self, state_spaces: List[mm.StateSpace]) -> None:
         self._state_spaces = state_spaces
+        self._max_distances = []
+        self._has_deadends = []
+        self._deadend_distance = float('inf')
+        for state_space in state_spaces:
+            max_goal_distance = 0
+            has_deadend = False
+            for goal_distance in state_space.get_goal_distances():
+                if goal_distance != self._deadend_distance:
+                    max_goal_distance = max(max_goal_distance, int(goal_distance))
+                else:
+                    has_deadend = True
+            self._max_distances.append(max_goal_distance)
+            self._has_deadends.append(has_deadend)
 
     def sample(self) -> Tuple[mm.State, mm.StateSpace, int]:
         # To achieve an even distribution, we uniformly sample a state space and select a valid goal-distance within that space.
         # Finally, we randomly sample a state from the selected state space and with the goal-distance.
         state_space_index = random.randint(0, len(self._state_spaces) - 1)
         sampled_state_space = self._state_spaces[state_space_index]
-        longest_distance = sampled_state_space.get_max_goal_distance()
-        goal_distance = random.randint(0, longest_distance)
-        sampled_state_index = sampled_state_space.sample_state_with_goal_distance(goal_distance)
+        max_goal_distance = self._max_distances[state_space_index]
+        has_deadends = self._has_deadends[state_space_index]
+        goal_distance = random.randint(-1 if has_deadends else 0, max_goal_distance)
+        if goal_distance < 0:
+            sampled_state_index = sampled_state_space.sample_state_with_goal_distance(self._deadend_distance)
+        else:
+            sampled_state_index = sampled_state_space.sample_state_with_goal_distance(goal_distance)
         sampled_state = sampled_state_space.get_state(sampled_state_index)
         return (sampled_state.get_state(), sampled_state_space, goal_distance)
 
@@ -139,34 +156,39 @@ def _train(model: SmoothmaxRelationalNeuralNetwork,
         # Train step
         for index, (relations, sizes, targets) in enumerate(train_dataset):
             # Forward pass
-            predictions = model.forward(relations, sizes).view(-1)
-            # The loss function has two parts: a standard absolute error loss
+            value_predictions, deadend_predictions = model.forward(relations, sizes)
+            # The value loss has two parts: a standard absolute error loss
             # and a distance loss. The distance loss compares the predicted
             # values. Specifically, for two states, s and s', the loss states
             # that |V(s) - V(s')| should equal |V*(s) - V*(s')|. This is done
             # for all possible pairs of s and s' in the batch.
-            value_loss = (predictions - targets).abs().mean()
-            prediction_pairs = torch.cartesian_prod(predictions, predictions)
+            value_mask = targets.ge(0)
+            value_loss = ((value_predictions - targets).abs() * value_mask).mean()
+            prediction_pairs = torch.cartesian_prod(value_predictions, value_predictions)
             target_pairs = torch.cartesian_prod(targets, targets)
             prediction_distances = (prediction_pairs[:, 0] - prediction_pairs[:, 1]).abs()
             target_distances = (target_pairs[:, 0] - target_pairs[:, 1]).abs()
             distance_loss = (prediction_distances - target_distances).abs().mean()
-            loss = value_loss + distance_loss
+            value_loss = value_loss + distance_loss
+            # The deadend loss is simply binary cross entropy with logits.
+            deadend_targets = 1.0 * targets.less(0)
+            deadend_loss = torch.nn.functional.binary_cross_entropy_with_logits(deadend_predictions, deadend_targets)
             # Backward pass and optimization
             optimizer.zero_grad()
-            loss.backward()
+            total_loss = value_loss + deadend_loss
+            total_loss.backward()
             optimizer.step()
             # Print loss every 100 steps (printing every step forces synchronization with CPU)
             if (index + 1) % 100 == 0:
-                print(f'[{epoch + 1}/{num_epochs}; {index + 1}/{len(train_dataset)}] Loss: {loss.item():.4f}')
+                print(f'[{epoch + 1}/{num_epochs}; {index + 1}/{len(train_dataset)}] Loss: {total_loss.item():.4f}')
         # Validation step
         with torch.no_grad():
             total_square_error = torch.zeros([1], dtype=torch.float, device=device)
             total_absolute_error = torch.zeros([1], dtype=torch.float, device=device)
             for index, (relations, sizes, targets) in enumerate(validation_dataset):
-                predictions = model.forward(relations, sizes).view(-1)
-                total_square_error += (predictions - targets).square().sum()
-                total_absolute_error += (predictions - targets).abs().sum()
+                value_predictions = model.forward(relations, sizes).view(-1)
+                total_square_error += (value_predictions - targets).square().sum()
+                total_absolute_error += (value_predictions - targets).abs().sum()
             total_samples = len(validation_dataset) * batch_size
             validation_loss = total_absolute_error / total_samples
             print(f'[{epoch + 1}/{num_epochs}] Validation loss: {validation_loss.item():.4f}')
