@@ -1,2 +1,2 @@
-pymimir==0.9.64
+pymimir==0.9.69
 torch==2.3.0+cu121

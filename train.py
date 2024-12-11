@@ -37,10 +37,10 @@ class StateSampler:
         has_deadends = self._has_deadends[state_space_index]
         goal_distance = random.randint(-1 if has_deadends else 0, max_goal_distance)
         if goal_distance < 0:
-            sampled_state_index = sampled_state_space.sample_state_with_goal_distance(self._deadend_distance)
+            sampled_state_index = sampled_state_space.sample_vertex_index_with_goal_distance(self._deadend_distance)
         else:
-            sampled_state_index = sampled_state_space.sample_state_with_goal_distance(goal_distance)
-        sampled_state = sampled_state_space.get_state(sampled_state_index)
+            sampled_state_index = sampled_state_space.sample_vertex_index_with_goal_distance(goal_distance)
+        sampled_state = sampled_state_space.get_vertex(sampled_state_index)
         return (sampled_state.get_state(), sampled_state_space, goal_distance)
 
 
@@ -77,10 +77,10 @@ def _generate_state_spaces(domain_path: str, problem_paths: List[str]) -> List[m
         state_space = mm.StateSpace.create(domain_path, problem_path, mm.StateSpaceOptions(max_num_states=1_000_000, timeout_ms=60_000))
         if state_space is not None:
             state_spaces.append(state_space)
-            print(f'- # States: {state_space.get_num_states()}')
+            print(f'- # States: {state_space.get_num_vertices()}')
         else:
             print('- Skipped')
-    state_spaces.sort(key=lambda state_space: state_space.get_num_states())
+    state_spaces.sort(key=lambda state_space: state_space.get_num_vertices())
     return state_spaces
 
 
@@ -116,7 +116,7 @@ def _sample_state_to_batch(relations: Dict[str, List[int]], sizes: List[int], ta
         if predicate_name not in relations: relations[predicate_name] = term_ids
         else: relations[predicate_name].extend(term_ids)
     # Add state to relations and sizes, together with the goal.
-    for atom in get_atoms(state, state_space.get_problem(), state_space.get_pddl_factories()): add_relations(atom, False)
+    for atom in get_atoms(state, state_space.get_problem(), state_space.get_pddl_repositories()): add_relations(atom, False)
     for atom in get_goal(state_space.get_problem()): add_relations(atom, True)
     sizes.append(len(state_space.get_problem().get_objects()))
     targets.append(target)

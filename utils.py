@@ -48,7 +48,7 @@ def load_checkpoint(path: str, device: torch.device):
     return model, optimizer
 
 
-def get_atoms(state: mm.State, problem: mm.Problem, factories: mm.PDDLFactories) -> List[Union[mm.StaticGroundAtom, mm.FluentGroundAtom, mm.DerivedGroundAtom]]:
+def get_atoms(state: mm.State, problem: mm.Problem, factories: mm.PDDLRepositories) -> List[Union[mm.StaticGroundAtom, mm.FluentGroundAtom, mm.DerivedGroundAtom]]:
     atoms = [literal.get_atom() for literal in problem.get_static_initial_literals()]
     atoms.extend(factories.get_fluent_ground_atoms_from_indices(state.get_fluent_atoms()))
     atoms.extend(factories.get_derived_ground_atoms_from_indices(state.get_derived_atoms()))
@@ -70,7 +70,7 @@ def relations_to_tensors(term_id_groups: Dict[str, List[int]], device: torch.dev
     return result
 
 
-def create_input(problem: mm.Problem, states: List[mm.State], factories: mm.PDDLFactories, device: torch.device):
+def create_input(problem: mm.Problem, states: List[mm.State], factories: mm.PDDLRepositories, device: torch.device):
     relations = {}
     sizes = []
     # Helper function for populating relations and sizes.
