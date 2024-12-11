@@ -150,7 +150,7 @@ def _train(model: SmoothmaxRelationalNeuralNetwork,
     train_dataset = [_sample_batch(train_states, batch_size, device) for _ in range(10_000)]
     validation_dataset = [_sample_batch(validation_states, batch_size, device) for _ in range(1_000)]
     # Training loop
-    best_validation_loss = None  # Track the best validation loss to detect overfitting.
+    best_absolute_error = None  # Track the best validation loss to detect overfitting.
     print('Training model...')
     for epoch in range(0, num_epochs):
         # Train step
@@ -183,18 +183,21 @@ def _train(model: SmoothmaxRelationalNeuralNetwork,
                 print(f'[{epoch + 1}/{num_epochs}; {index + 1}/{len(train_dataset)}] Loss: {total_loss.item():.4f}')
         # Validation step
         with torch.no_grad():
-            total_square_error = torch.zeros([1], dtype=torch.float, device=device)
-            total_absolute_error = torch.zeros([1], dtype=torch.float, device=device)
-            for index, (relations, sizes, targets) in enumerate(validation_dataset):
-                value_predictions = model.forward(relations, sizes).view(-1)
-                total_square_error += (value_predictions - targets).square().sum()
-                total_absolute_error += (value_predictions - targets).abs().sum()
+            absolute_error = torch.zeros([1], dtype=torch.float, device=device)
+            deadend_error = torch.zeros([1], dtype=torch.float, device=device)
+            for relations, sizes, targets in validation_dataset:
+                value_predictions, deadend_predictions = model.forward(relations, sizes)
+                value_mask = targets.ge(0)
+                absolute_error += ((value_predictions - targets).abs() * value_mask).sum()
+                deadend_targets = 1.0 * targets.less(0)
+                deadend_error += torch.nn.functional.binary_cross_entropy_with_logits(deadend_predictions, deadend_targets, reduction='sum')
             total_samples = len(validation_dataset) * batch_size
-            validation_loss = total_absolute_error / total_samples
-            print(f'[{epoch + 1}/{num_epochs}] Validation loss: {validation_loss.item():.4f}')
+            absolute_error = absolute_error / total_samples
+            deadend_error = deadend_error / total_samples
+            print(f'[{epoch + 1}/{num_epochs}] Absolute error: {absolute_error.item():.4f}; Deadend error: {deadend_error.item():.4f}')
             save_checkpoint(model, optimizer, 'latest.pth')
-            if (best_validation_loss is None) or (validation_loss < best_validation_loss):
-                best_validation_loss = validation_loss
+            if (best_absolute_error is None) or (absolute_error < best_absolute_error):
+                best_absolute_error = absolute_error
                 save_checkpoint(model, optimizer, 'best.pth')
                 print(f'[{epoch + 1}/{num_epochs}] Saved new best model')
 

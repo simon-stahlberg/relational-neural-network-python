@@ -26,7 +26,7 @@ def _create_parser(input: Path) -> mm.PDDLParser:
     return mm.PDDLParser(domain_file, problem_file)
 
 
-def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRelationalNeuralNetwork, device: torch.device) -> Union[None, List[mm.GroundAction]]:
+def _plan(problem: mm.Problem, factories: mm.PDDLRepositories, model: SmoothmaxRelationalNeuralNetwork, device: torch.device) -> Union[None, List[mm.GroundAction]]:
     solution = []
     # Helper function for testing is a state is a goal state.
     def is_goal_state(state: mm.State) -> bool:
@@ -38,11 +38,12 @@ def _plan(problem: mm.Problem, factories: mm.PDDLFactories, model: SmoothmaxRela
         current_state = state_repository.get_or_create_initial_state()
         while (not is_goal_state(current_state)) and (len(solution) < 1_000):
             applicable_actions = successor_generator.compute_applicable_actions(current_state)
-            successor_states = [state_repository.get_or_create_successor_state(current_state, action) for action in applicable_actions]
+            successor_states = [state_repository.get_or_create_successor_state(current_state, action)[0] for action in applicable_actions]
             relations, sizes = create_input(problem, successor_states, factories, device)
-            output = model.forward(relations, sizes).view(-1)
-            min_index = output.argmin()
-            min_value = output[min_index]
+            values, deadends = model.forward(relations, sizes)
+            # TODO: Take deadends into account.
+            min_index = values.argmin()
+            min_value = values[min_index]
             min_action = applicable_actions[min_index]
             min_successor = successor_states[min_index]
             current_state = min_successor
@@ -57,7 +58,7 @@ def _main(args: argparse.Namespace) -> None:
     parser = _create_parser(args.input)
     print(f'Loading model... ({args.model})')
     model, _ = load_checkpoint(args.model, device)
-    factories = parser.get_pddl_factories()
+    factories = parser.get_pddl_repositories()
     solution = _plan(parser.get_problem(), factories, model, device)
     if solution is None:
         print('Failed to find a solution!')
