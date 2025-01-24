@@ -1,8 +1,6 @@
 import pymimir as mm
 import torch
-import torch.optim as optim
 
-from relnn_max import SmoothmaxRelationalNeuralNetwork
 from typing import Union
 
 
@@ -56,22 +54,3 @@ def relations_to_tensors(term_id_groups: dict[str, list[int]], device: torch.dev
     for key, value in term_id_groups.items():
         result[key] = torch.tensor(value, dtype=torch.int, device=device, requires_grad=False)
     return result
-
-
-# def create_input(problem: mm.Problem, states: List[mm.State], factories: mm.PDDLRepositories, device: torch.device):
-#     relations = {}
-#     sizes = []
-#     # Helper function for populating relations and sizes.
-#     def add_relations(atom, offset, is_goal_atom):
-#         predicate_name = get_atom_name(atom, state, is_goal_atom)
-#         term_ids = [term.get_index() + offset for term in atom.get_objects()]
-#         if predicate_name not in relations: relations[predicate_name] = term_ids
-#         else: relations[predicate_name].extend(term_ids)
-#     # Add all states to relations and sizes, together with the goal.
-#     for state in states:
-#         offset = sum(sizes)
-#         for atom in get_atoms(state, problem, factories): add_relations(atom, offset, False)
-#         for atom in get_goal(problem): add_relations(atom, offset, True)
-#         sizes.append(len(problem.get_objects()))
-#     # Move all lists to the GPU as tensors.
-#     return relations_to_tensors(relations, device), torch.tensor(sizes, dtype=torch.int, device=device, requires_grad=False)

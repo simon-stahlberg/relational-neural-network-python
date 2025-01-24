@@ -6,9 +6,8 @@ import torch.nn as nn
 import torch.optim as optim
 
 from pathlib import Path
-from typing import Dict, List, Tuple
 from rgnn import RelationalGraphNeuralNetwork, load_checkpoint, save_checkpoint
-from utils import StateWrapper, create_device, get_atom_name, get_predicate_name, relations_to_tensors
+from utils import StateWrapper, create_device
 
 
 class StateSampler:
@@ -49,6 +48,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument('--input', required=True, type=Path, help='Path to the training dataset')
     parser.add_argument('--model', default=None, type=Path, help='Path to a pre-trained model to continue training from')
     parser.add_argument('--embedding_size', default=32, type=int, help='Dimension of the embedding vector for each object')
+    parser.add_argument('--aggregation', default='smax', type=str, help='Aggregation function ("smax", "max", "sum", or "mean")')
     parser.add_argument('--layers', default=30, type=int, help='Number of layers in the model')
     parser.add_argument('--batch_size', default=64, type=int, help='Number of samples per batch')
     parser.add_argument('--learning_rate', default=0.0002, type=float, help='Learning rate for the training process')
@@ -57,7 +57,7 @@ def _parse_arguments() -> argparse.Namespace:
     return args
 
 
-def _parse_instances(input: Path) -> Tuple[str, List[str]]:
+def _parse_instances(input: Path) -> tuple[str, list[str]]:
     print('Parsing files...')
     if input.is_file():
         domain_file = str(input.parent / 'domain.pddl')
@@ -69,9 +69,9 @@ def _parse_instances(input: Path) -> Tuple[str, List[str]]:
     return domain_file, problem_files
 
 
-def _generate_state_spaces(domain_path: str, problem_paths: List[str]) -> List[mm.StateSpace]:
+def _generate_state_spaces(domain_path: str, problem_paths: list[str]) -> list[mm.StateSpace]:
     print('Generating state spaces...')
-    state_spaces: List[mm.StateSpace] = []
+    state_spaces: list[mm.StateSpace] = []
     for problem_path in problem_paths:
         print(f'> Expanding: {problem_path}')
         state_space = mm.StateSpace.create(domain_path, problem_path, mm.StateSpaceOptions(max_num_states=1_000_000, timeout_ms=60_000))
@@ -94,8 +94,8 @@ def _create_state_samplers(state_spaces: list[mm.StateSpace]) -> tuple[StateSamp
     return train_dataset, validation_dataset
 
 
-def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, num_classifiers: int, aggregation: str, device: torch.device) -> nn.Module:
-    return RelationalGraphNeuralNetwork(domain, embedding_size, num_layers, num_classifiers, aggregation).to(device)
+def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, aggregation: str, device: torch.device) -> nn.Module:
+    return RelationalGraphNeuralNetwork(domain, embedding_size, num_layers, aggregation).to(device)
 
 
 def _sample_batch(state_sampler: StateSampler, batch_size: int, device: torch.device) -> tuple[list[StateWrapper], torch.Tensor]:
@@ -115,8 +115,8 @@ def _train(model: RelationalGraphNeuralNetwork,
            num_epochs: int,
            batch_size: int,
            device: torch.device) -> None:
-    TRAIN_SIZE = 100
-    VALIDATION_SIZE = 10
+    TRAIN_SIZE = 1000
+    VALIDATION_SIZE = 100
     # Training loop
     best_absolute_error = None  # Track the best validation loss to detect overfitting.
     print('Training model...')
@@ -124,13 +124,13 @@ def _train(model: RelationalGraphNeuralNetwork,
         # Train step
         for index in range(TRAIN_SIZE):
             # Forward pass
-            states, targets = _sample_batch(train_states, batch_size, device)
+            states, value_targets = _sample_batch(train_states, batch_size, device)
             value_predictions, deadend_predictions = model.forward(states)
             # Value loss is absolute mean error.
-            value_mask = targets.ge(0)
-            value_loss = ((value_predictions - targets).abs() * value_mask).mean()
+            value_mask = value_targets.ge(0)
+            value_loss = ((value_predictions - value_targets).abs() * value_mask).mean()
             # The deadend loss is simply binary cross entropy with logits.
-            deadend_targets = 1.0 * targets.less(0)
+            deadend_targets = 1.0 * value_targets.less(0)
             deadend_loss = torch.nn.functional.binary_cross_entropy_with_logits(deadend_predictions, deadend_targets)
             # Backward pass and optimization
             optimizer.zero_grad()
@@ -145,11 +145,11 @@ def _train(model: RelationalGraphNeuralNetwork,
             absolute_error = torch.zeros([1], dtype=torch.float, device=device)
             deadend_error = torch.zeros([1], dtype=torch.float, device=device)
             for index in range(VALIDATION_SIZE):
-                states, targets = _sample_batch(validation_states, batch_size, device)
+                states, value_targets = _sample_batch(validation_states, batch_size, device)
                 value_predictions, deadend_predictions = model.forward(states)
-                value_mask = targets.ge(0)
-                absolute_error += ((value_predictions - targets).abs() * value_mask).sum()
-                deadend_targets = 1.0 * targets.less(0)
+                value_mask = value_targets.ge(0)
+                absolute_error += ((value_predictions - value_targets).abs() * value_mask).sum()
+                deadend_targets = 1.0 * value_targets.less(0)
                 deadend_error += torch.nn.functional.binary_cross_entropy_with_logits(deadend_predictions, deadend_targets, reduction='sum')
             total_samples = VALIDATION_SIZE * batch_size
             absolute_error = absolute_error / total_samples
@@ -171,7 +171,7 @@ def _main(args: argparse.Namespace) -> None:
     domain = state_spaces[0].get_problem().get_domain()
     if args.model is None:
         print('Creating a new model and optimizer...')
-        model = _create_model(domain, args.embedding_size, args.layers, device)
+        model = _create_model(domain, args.embedding_size, args.layers, args.aggregation, device)
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     else:
         print(f'Loading an existing model and optimizer... ({args.model})')

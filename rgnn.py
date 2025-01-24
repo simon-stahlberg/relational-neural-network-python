@@ -87,7 +87,20 @@ class SumRelationMessagePassing(RelationMessagePassingBase):
         return self._update_mlp(torch.cat((sum_msg, node_embeddings), 1))
 
 
-class SmoothMaximumRelationMessagePassing(RelationMessagePassingBase):
+
+class MaxRelationMessagePassing(RelationMessagePassingBase):
+    def __init__(self, problem: mm.Problem, embedding_size: int):
+        super().__init__(problem, embedding_size)
+        self._update_mlp = MLP(2 * embedding_size, embedding_size)
+
+    def forward(self, node_embeddings: torch.Tensor, atoms: dict[str, torch.Tensor]) -> torch.Tensor:
+        output_messages, output_indices = self._compute_messages_and_indices(node_embeddings, atoms)
+        max_msg = torch.zeros_like(node_embeddings)
+        max_msg.index_reduce_(0, output_indices, output_messages, 'amax', include_self=False)
+        return self._update_mlp(torch.cat((max_msg, node_embeddings), 1))
+
+
+class SmoothMaxRelationMessagePassing(RelationMessagePassingBase):
     def __init__(self, problem: mm.Problem, embedding_size: int):
         super().__init__(problem, embedding_size)
         self._update_mlp = MLP(2 * embedding_size, embedding_size)
@@ -113,7 +126,8 @@ class RelationalMessagePassingModule(nn.Module):
         super().__init__()
         self._num_layers = num_layers
         self._embedding_size = embedding_size
-        if aggregation == 'max': self._relation_network = SmoothMaximumRelationMessagePassing(predicate_signatures, embedding_size)
+        if aggregation == 'smax': self._relation_network = SmoothMaxRelationMessagePassing(predicate_signatures, embedding_size)
+        elif aggregation == 'max': self._relation_network = MaxRelationMessagePassing(predicate_signatures, embedding_size)
         elif aggregation == 'sum': self._relation_network = SumRelationMessagePassing(predicate_signatures, embedding_size)
         elif aggregation == 'mean': self._relation_network = MeanRelationMessagePassing(predicate_signatures, embedding_size)
         else: raise ValueError(f'invalid aggregation: "{aggregation}"')
@@ -143,7 +157,7 @@ class StateEncoder(nn.Module):
         relation_name_arities.extend([(get_predicate_name(predicate, True), len(predicate.get_parameters())) for predicate in predicates])
         return relation_name_arities
 
-    def forward(self, state_wrappers: list[StateWrapper]) -> tuple[torch.Tensor, dict[str, torch.Tensor], dict[str, torch.Tensor], torch.Tensor, tuple[dict[str, torch.Tensor], dict[str, torch.Tensor], dict[str, str]]]:
+    def forward(self, state_wrappers: list[StateWrapper]) -> tuple[torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
         device = self.get_device()
         atoms = {}
         token_sizes = []
@@ -187,7 +201,7 @@ class RelationalGraphNeuralNetwork(nn.Module):
         self._deadend_readout = SumReadout(embedding_size, 1)
 
     def forward(self, states: list[StateWrapper]) -> tuple[torch.Tensor, torch.Tensor]:
-        node_embeddings, atoms, token_sizes, _ = self._encoder(states)
+        node_embeddings, atoms, token_sizes = self._encoder(states)
         node_embeddings = self._mpnn_module(node_embeddings, atoms)
         values = self._value_readout(node_embeddings, token_sizes).view(-1)
         deadends = self._deadend_readout(node_embeddings, token_sizes).view(-1)
