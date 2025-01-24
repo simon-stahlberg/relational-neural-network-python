@@ -6,13 +6,13 @@ import torch.nn as nn
 import torch.optim as optim
 
 from pathlib import Path
-from relnn_max import SmoothmaxRelationalNeuralNetwork
 from typing import Dict, List, Tuple
-from utils import create_device, get_atom_name, get_atoms, get_goal, get_predicate_name, relations_to_tensors, save_checkpoint, load_checkpoint
+from rgnn import RelationalGraphNeuralNetwork, load_checkpoint, save_checkpoint
+from utils import StateWrapper, create_device, get_atom_name, get_predicate_name, relations_to_tensors
 
 
 class StateSampler:
-    def __init__(self, state_spaces: List[mm.StateSpace]) -> None:
+    def __init__(self, state_spaces: list[mm.StateSpace]) -> None:
         self._state_spaces = state_spaces
         self._max_distances = []
         self._has_deadends = []
@@ -28,7 +28,7 @@ class StateSampler:
             self._max_distances.append(max_goal_distance)
             self._has_deadends.append(has_deadend)
 
-    def sample(self) -> Tuple[mm.State, mm.StateSpace, int]:
+    def sample(self) -> tuple[mm.State, mm.StateSpace, int]:
         # To achieve an even distribution, we uniformly sample a state space and select a valid goal-distance within that space.
         # Finally, we randomly sample a state from the selected state space and with the goal-distance.
         state_space_index = random.randint(0, len(self._state_spaces) - 1)
@@ -84,7 +84,7 @@ def _generate_state_spaces(domain_path: str, problem_paths: List[str]) -> List[m
     return state_spaces
 
 
-def _create_state_samplers(state_spaces: List[mm.StateSpace]) -> Tuple[StateSampler, StateSampler]:
+def _create_state_samplers(state_spaces: list[mm.StateSpace]) -> tuple[StateSampler, StateSampler]:
     print('Creating state samplers...')
     train_size = int(len(state_spaces) * 0.8)
     train_state_spaces = state_spaces[:train_size]
@@ -94,82 +94,41 @@ def _create_state_samplers(state_spaces: List[mm.StateSpace]) -> Tuple[StateSamp
     return train_dataset, validation_dataset
 
 
-def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, device: torch.device) -> nn.Module:
-    predicates = []
-    predicates.extend(domain.get_static_predicates())
-    predicates.extend(domain.get_fluent_predicates())
-    predicates.extend(domain.get_derived_predicates())
-    relation_name_arities = [(get_predicate_name(predicate, False, True), len(predicate.get_parameters())) for predicate in predicates]
-    relation_name_arities.extend([(get_predicate_name(predicate, True, True), len(predicate.get_parameters())) for predicate in predicates])
-    relation_name_arities.extend([(get_predicate_name(predicate, True, False), len(predicate.get_parameters())) for predicate in predicates])
-    model = SmoothmaxRelationalNeuralNetwork(relation_name_arities, embedding_size, num_layers).to(device)
-    return model
+def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, num_classifiers: int, aggregation: str, device: torch.device) -> nn.Module:
+    return RelationalGraphNeuralNetwork(domain, embedding_size, num_layers, num_classifiers, aggregation).to(device)
 
 
-def _sample_state_to_batch(relations: Dict[str, List[int]], sizes: List[int], targets: List[int], states: StateSampler):
-    state, state_space, target = states.sample()
-    offset = sum(sizes)
-    # Helper function for populating relations and sizes.
-    def add_relations(atom, is_goal_atom):
-        predicate_name = get_atom_name(atom, state, is_goal_atom)
-        term_ids = [term.get_index() + offset for term in atom.get_objects()]
-        if predicate_name not in relations: relations[predicate_name] = term_ids
-        else: relations[predicate_name].extend(term_ids)
-    # Add state to relations and sizes, together with the goal.
-    for atom in get_atoms(state, state_space.get_problem(), state_space.get_pddl_repositories()): add_relations(atom, False)
-    for atom in get_goal(state_space.get_problem()): add_relations(atom, True)
-    sizes.append(len(state_space.get_problem().get_objects()))
-    targets.append(target)
-
-
-def _sample_batch(states: StateSampler, batch_size: int, device: torch.device) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
-    relations = {}
-    sizes = []
-    targets = []
+def _sample_batch(state_sampler: StateSampler, batch_size: int, device: torch.device) -> tuple[list[StateWrapper], torch.Tensor]:
+    states: list[StateWrapper] = []
+    targets: list[float]  = []
     for _ in range(batch_size):
-        _sample_state_to_batch(relations, sizes, targets, states)
-    relation_tensors = relations_to_tensors(relations, device)
-    size_tensor = torch.tensor(sizes, dtype=torch.int, device=device, requires_grad=False)
-    target_tensor = torch.tensor(targets, dtype=torch.float, device=device, requires_grad=False)
-    return relation_tensors, size_tensor, target_tensor
+        state, state_space, target = state_sampler.sample()
+        states.append(StateWrapper(state, state_space.get_problem(), state_space.get_pddl_repositories()))
+        targets.append(target)
+    return states, torch.tensor(targets,  dtype=torch.float, requires_grad=False, device=device)
 
 
-def _train(model: SmoothmaxRelationalNeuralNetwork,
+def _train(model: RelationalGraphNeuralNetwork,
            optimizer: optim.Adam,
            train_states: StateSampler,
            validation_states: StateSampler,
            num_epochs: int,
            batch_size: int,
            device: torch.device) -> None:
-    # While we can sample states on the fly from the state spaces, this creates
-    # a significant overhead because the states need to be translated to the
-    # correct format and transferred to the GPU. Instead, we sample a fixed
-    # number of states and move them to the GPU before training. This approach
-    # increases GPU utilization.
-    print('Creating datasets...')
-    train_dataset = [_sample_batch(train_states, batch_size, device) for _ in range(10_000)]
-    validation_dataset = [_sample_batch(validation_states, batch_size, device) for _ in range(1_000)]
+    TRAIN_SIZE = 100
+    VALIDATION_SIZE = 10
     # Training loop
     best_absolute_error = None  # Track the best validation loss to detect overfitting.
     print('Training model...')
     for epoch in range(0, num_epochs):
         # Train step
-        for index, (relations, sizes, targets) in enumerate(train_dataset):
+        for index in range(TRAIN_SIZE):
             # Forward pass
-            value_predictions, deadend_predictions = model.forward(relations, sizes)
-            # The value loss has two parts: a standard absolute error loss
-            # and a distance loss. The distance loss compares the predicted
-            # values. Specifically, for two states, s and s', the loss states
-            # that |V(s) - V(s')| should equal |V*(s) - V*(s')|. This is done
-            # for all possible pairs of s and s' in the batch.
+            states, targets = _sample_batch(train_states, batch_size, device)
+            value_predictions, deadend_predictions = model.forward(states)
+            # Value loss is absolute mean error.
             value_mask = targets.ge(0)
             value_loss = ((value_predictions - targets).abs() * value_mask).mean()
-            prediction_pairs = torch.cartesian_prod(value_predictions, value_predictions)
-            target_pairs = torch.cartesian_prod(targets, targets)
-            prediction_distances = (prediction_pairs[:, 0] - prediction_pairs[:, 1]).abs()
-            target_distances = (target_pairs[:, 0] - target_pairs[:, 1]).abs()
-            distance_loss = (prediction_distances - target_distances).abs().mean()
-            value_loss = value_loss + distance_loss
             # The deadend loss is simply binary cross entropy with logits.
             deadend_targets = 1.0 * targets.less(0)
             deadend_loss = torch.nn.functional.binary_cross_entropy_with_logits(deadend_predictions, deadend_targets)
@@ -180,18 +139,19 @@ def _train(model: SmoothmaxRelationalNeuralNetwork,
             optimizer.step()
             # Print loss every 100 steps (printing every step forces synchronization with CPU)
             if (index + 1) % 100 == 0:
-                print(f'[{epoch + 1}/{num_epochs}; {index + 1}/{len(train_dataset)}] Loss: {total_loss.item():.4f}')
+                print(f'[{epoch + 1}/{num_epochs}; {index + 1}/{TRAIN_SIZE}] Loss: {total_loss.item():.4f}')
         # Validation step
         with torch.no_grad():
             absolute_error = torch.zeros([1], dtype=torch.float, device=device)
             deadend_error = torch.zeros([1], dtype=torch.float, device=device)
-            for relations, sizes, targets in validation_dataset:
-                value_predictions, deadend_predictions = model.forward(relations, sizes)
+            for index in range(VALIDATION_SIZE):
+                states, targets = _sample_batch(validation_states, batch_size, device)
+                value_predictions, deadend_predictions = model.forward(states)
                 value_mask = targets.ge(0)
                 absolute_error += ((value_predictions - targets).abs() * value_mask).sum()
                 deadend_targets = 1.0 * targets.less(0)
                 deadend_error += torch.nn.functional.binary_cross_entropy_with_logits(deadend_predictions, deadend_targets, reduction='sum')
-            total_samples = len(validation_dataset) * batch_size
+            total_samples = VALIDATION_SIZE * batch_size
             absolute_error = absolute_error / total_samples
             deadend_error = deadend_error / total_samples
             print(f'[{epoch + 1}/{num_epochs}] Absolute error: {absolute_error.item():.4f}; Deadend error: {deadend_error.item():.4f}')
@@ -215,7 +175,7 @@ def _main(args: argparse.Namespace) -> None:
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     else:
         print(f'Loading an existing model and optimizer... ({args.model})')
-        model, optimizer = load_checkpoint(args.model, device)
+        model, optimizer = load_checkpoint(domain, args.model, device)
     _train(model, optimizer, train_dataset, validation_dataset, args.num_epochs, args.batch_size, device)
 
 
