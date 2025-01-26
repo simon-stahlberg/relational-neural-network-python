@@ -2,7 +2,6 @@
 
 This repository implements the relational neural network architecture presented in *Ståhlberg, Bonet, Geffner, ICAPS 2022* (https://ojs.aaai.org/index.php/ICAPS/article/view/19851/19610).
 The implementation is not strictly faithful to the original and includes a few optimizations to reduce training time, such as residual connections.
-The loss function also includes an auxiliary term to help reduce the number of training steps.
 
 The purpose of this repository is to serve as a starting point for developing new approaches and is thus very barebones.
 It contains a very simple training loop without any optimizations like learning rate schedulers, curriculum learning, gradient clipping, and so on.
