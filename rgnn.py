@@ -95,8 +95,8 @@ class MaxRelationMessagePassing(RelationMessagePassingBase):
 
     def forward(self, node_embeddings: torch.Tensor, atoms: dict[str, torch.Tensor]) -> torch.Tensor:
         output_messages, output_indices = self._compute_messages_and_indices(node_embeddings, atoms)
-        max_msg = torch.zeros_like(node_embeddings)
-        max_msg.index_reduce_(0, output_indices, output_messages, 'amax', include_self=False)
+        max_msg = torch.full_like(node_embeddings, float('-inf')) # include_self=False leads to an error for some reason. Use -inf to get the same result.
+        max_msg.index_reduce_(0, output_indices, output_messages, reduce='amax', include_self=True)
         return self._update_mlp(torch.cat((max_msg, node_embeddings), 1))
 
 
