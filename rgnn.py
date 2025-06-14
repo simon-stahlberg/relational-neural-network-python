@@ -3,6 +3,7 @@ import random
 import torch
 import torch.nn as nn
 
+from pathlib import Path
 from torch.nn.functional import mish
 from typing import Union
 
@@ -454,7 +455,7 @@ class RelationalGraphNeuralNetwork(nn.Module):
         torch.save(checkpoint, path)
 
     @staticmethod
-    def load(domain: mm.Domain, path: str, device: torch.device) -> 'tuple[RelationalGraphNeuralNetwork, dict]':
+    def load(domain: mm.Domain, path: Union[Path, str], device: torch.device) -> 'tuple[RelationalGraphNeuralNetwork, dict]':
         """
         Loads a model from a checkpoint file.
 
@@ -467,7 +468,7 @@ class RelationalGraphNeuralNetwork(nn.Module):
         :return: A tuple containing the loaded model and a dictionary with additional information (e.g., optimizer state).
         :rtype: tuple[RelationalGraphNeuralNetwork, dict]
         """
-        checkpoint = torch.load(path, map_location=device)
+        checkpoint = torch.load(str(path), map_location=device)
         hparams_dict = checkpoint['hparams']
         model_dict = checkpoint['model']
         extras_dict = checkpoint['extras']

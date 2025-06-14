@@ -3,36 +3,22 @@ import pymimir as mm
 import torch
 
 from pathlib import Path
-from typing import List
-from rgnn import RelationalGraphNeuralNetwork, load_checkpoint
-from utils import StateWrapper, create_device
+from rgnn import RelationalGraphNeuralNetwork
+from utils import create_device
 
 
-class NeuralHeuristic(mm.IHeuristic):
-    def __init__(self, problem: mm.Problem, pddl_repositories: mm.PDDLRepositories, model: RelationalGraphNeuralNetwork, device: torch.device):
-        mm.IHeuristic.__init__(self)
+class NeuralHeuristic(mm.Heuristic):
+    def __init__(self, problem: mm.Problem, model: RelationalGraphNeuralNetwork):
+        super().__init__()
         self._problem = problem
-        self._pddl_repositories = pddl_repositories
         self._model = model
-        self._device = device
 
-    def compute_heuristic(self, state: mm.State, is_goal: bool) -> float:
-        if is_goal: return 0.0
-        input = [StateWrapper(state, self._problem, self._pddl_repositories)]
-        values, deadends = self._model.forward(input)
-        # TODO: Take deadends into account.
-        return values[0].item()
-
-
-class AStarEventHandler(mm.AStarAlgorithmEventHandlerBase):
-    def __init__(self, quiet = True):
-        mm.AStarAlgorithmEventHandlerBase.__init__(self, quiet)
-        self.expanded_states = 0
-        self.generated_states = 0
-
-    def on_expand_state_impl(self, state: mm.State, problem: mm.Problem, pddl_repositories: mm.PDDLRepositories): self.expanded_states += 1
-    def on_generate_state_impl(self, state: mm.State, action: mm.GroundAction, cost: float, problem: mm.Problem, pddl_repositories: mm.PDDLRepositories): self.generated_states += 1
-    def on_finish_f_layer_impl(self, f_value: float, num_expanded_states: int, num_generated_states: int): print(f'[f = {f_value:.3f}] Expanded: {self.expanded_states}; Generated: {self.generated_states}')
+    def compute_value(self, state: mm.State, is_goal_state: bool) -> float:
+        if is_goal_state: return 0.0
+        with torch.no_grad():
+            self._model.eval()
+            value = self._model.forward_value([state])[0]
+            return value
 
 
 def _parse_arguments() -> argparse.Namespace:
@@ -44,41 +30,44 @@ def _parse_arguments() -> argparse.Namespace:
     return args
 
 
-def _create_parser(input: Path) -> mm.PDDLParser:
-    print('Creating parser...')
-    if input.is_file():
-        domain_file = str(input.parent / 'domain.pddl')
-        problem_file = str(input)
-    else:
-        raise Exception('input is not a file')
-    return mm.PDDLParser(domain_file, problem_file)
-
-
 def _main(args: argparse.Namespace) -> None:
     print(f'Torch: {torch.__version__}')
-    parser = mm.PDDLParser(str(args.domain), str(args.problem))
-    problem = parser.get_problem()
-    domain = problem.get_domain()
-    repositories = parser.get_pddl_repositories()
+    domain = mm.Domain(args.domain)
+    problem = mm.Problem(domain, args.problem)
     print(f'Loading model... ({args.model})')
     device = create_device()
-    model, _ = load_checkpoint(domain, args.model, device)
-    grounder = mm.Grounder(problem, repositories)
-    successor_generator = mm.LiftedApplicableActionGenerator(grounder.get_action_grounder())
-    axiom_evaluator = mm.LiftedAxiomEvaluator(grounder.get_axiom_grounder())
-    state_repository = mm.StateRepository(axiom_evaluator)
-    sr_workspace = mm.StateRepositoryWorkspace()
-    initial_state = state_repository.get_or_create_initial_state(sr_workspace)
-    neural_heuristic = NeuralHeuristic(problem, repositories, model, device)
-    event_handler = AStarEventHandler(False)
-    search_result = mm.find_solution_astar(successor_generator, state_repository, neural_heuristic, initial_state, event_handler)
-    print(f'[Final] Expanded: {event_handler.expanded_states}; Generated: {event_handler.generated_states}')
-    if search_result.status == mm.SearchStatus.SOLVED:
-        print(f'Found a solution with cost {search_result.plan.get_cost()}')
-        for index, action in enumerate(search_result.plan.get_actions()):
-            print(f'{index + 1}: {action.to_string_for_plan(repositories)}')
+    model, _ = RelationalGraphNeuralNetwork.load(domain, args.model, device)
+    initial_state = problem.get_initial_state()
+    neural_heuristic = NeuralHeuristic(problem, model)
+    # Initialize counters for statistics.
+    num_expanded = 0
+    num_generated = 0
+    def increment_expanded(state):
+        nonlocal num_expanded
+        num_expanded += 1
+    def increment_generated(state, action, cost, successor_state):
+        nonlocal num_generated
+        num_generated += 1
+    def print_f_layer(f: float):
+        print(f'[f={f:.3f}] Expanded: {num_expanded}, Generated: {num_generated}')
+    # Start the A* search with eager evaluation.
+    result = mm.astar_eager(
+        problem,
+        initial_state,
+        neural_heuristic,
+        on_expand_state=increment_expanded,
+        on_generate_state=increment_generated,
+        on_finish_f_layer=print_f_layer,
+    )
+    # Print the statistics.
+    print(f'[Final] Expanded: {num_expanded}, Generated: {num_generated}')
+    # Print the result of the search.
+    if result.status == "solved":
+        print(f'Found a solution of length {len(result.solution)}!')
+        for index, action in enumerate(result.solution):
+            print(f'{index + 1:>3}: {str(action)}')
     else:
-        print('Failed solving problem')
+        print('Failed to find a solution!')
 
 
 if __name__ == '__main__':
