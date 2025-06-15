@@ -65,7 +65,7 @@ def _main(args: argparse.Namespace) -> None:
     if result.status == "solved":
         print(f'Found a solution of length {len(result.solution)}!')
         for index, action in enumerate(result.solution):
-            print(f'{index + 1:>3}: {str(action)}')
+            print(f'{index + 1:>4}: {str(action)}')
     else:
         print('Failed to find a solution!')
 

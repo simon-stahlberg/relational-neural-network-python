@@ -68,7 +68,7 @@ def _generate_state_spaces(problems: list[mm.Problem], seed: int) -> list[mm.Sta
     state_space_samplers: list[mm.StateSpaceSampler] = []
     for problem in problems:
         print(f'> Expanding: {problem.get_name()}')
-        state_space_sampler = mm.StateSpaceSampler.new(problem, 1_000_000)
+        state_space_sampler = mm.StateSpaceSampler.new(problem, 10_000_000)
         if state_space_sampler is not None:
             state_space_sampler.set_seed(seed)
             state_space_samplers.append(state_space_sampler)

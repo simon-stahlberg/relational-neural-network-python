@@ -50,7 +50,7 @@ def _main(args: argparse.Namespace) -> None:
     else:
         print(f'Found a solution of length {len(solution)}!')
         for index, action in enumerate(solution):
-            print(f'{index + 1}: {str(action)}')
+            print(f'{index + 1:>4}: {str(action)}')
 
 
 if __name__ == '__main__':
