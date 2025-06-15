@@ -161,11 +161,11 @@ def _main(args: argparse.Namespace) -> None:
     if args.model is None:
         print('Creating a new model and optimizer...')
         model = _create_model(domain, args.embedding_size, args.layers, args.aggregation, device)
-        optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
+        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     else:
         print(f'Loading an existing model and optimizer... ({args.model})')
         model, extras = RelationalGraphNeuralNetwork.load(domain, args.model, device)
-        optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
+        optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
         optimizer.load_state_dict(extras['optimizer'])
     _train(model, optimizer, train_dataset, validation_dataset, args.num_epochs, args.batch_size, device)
 
