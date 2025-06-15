@@ -8,9 +8,8 @@ from utils import create_device
 
 
 class NeuralHeuristic(mm.Heuristic):
-    def __init__(self, problem: mm.Problem, model: RelationalGraphNeuralNetwork):
+    def __init__(self, model: RelationalGraphNeuralNetwork):
         super().__init__()
-        self._problem = problem
         self._model = model
 
     def compute_value(self, state: mm.State, is_goal_state: bool) -> float:
@@ -38,7 +37,7 @@ def _main(args: argparse.Namespace) -> None:
     device = create_device()
     model, _ = RelationalGraphNeuralNetwork.load(domain, args.model, device)
     initial_state = problem.get_initial_state()
-    neural_heuristic = NeuralHeuristic(problem, model)
+    neural_heuristic = NeuralHeuristic(model)
     # Initialize counters for statistics.
     num_expanded = 0
     num_generated = 0
