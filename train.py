@@ -1,12 +1,12 @@
 import argparse
 import pymimir as mm
+import pymimir_rgnn as rgnn
 import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 from pathlib import Path
-from rgnn import RelationalGraphNeuralNetwork
 from utils import create_device
 
 
@@ -35,7 +35,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument('--aggregation', default='hmax', type=str, help='Aggregation function ("smax", "hmax", "sum", or "mean")')
     parser.add_argument('--layers', default=30, type=int, help='Number of layers in the model')
     parser.add_argument('--batch_size', default=64, type=int, help='Number of samples per batch')
-    parser.add_argument('--learning_rate', default=0.00002, type=float, help='Learning rate for the training process')
+    parser.add_argument('--learning_rate', default=0.0002, type=float, help='Learning rate for the training process')
     parser.add_argument('--num_epochs', default=1_000, type=int, help='Number of epochs for the training process')
     parser.add_argument('--seed', default=42, type=int, help='Random seed for reproducibility')
     args = parser.parse_args()
@@ -89,28 +89,35 @@ def _create_datasets(state_space_samplers: list[mm.StateSpaceSampler]) -> tuple[
 
 
 def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, aggregation: str, device: torch.device) -> nn.Module:
-    return RelationalGraphNeuralNetwork(
+    if aggregation == 'smax': aggregation = rgnn.AggregationFunction.SmoothMaximum
+    elif aggregation == 'hmax': aggregation = rgnn.AggregationFunction.HardMaximum
+    elif aggregation == 'mean': aggregation = rgnn.AggregationFunction.Mean
+    elif aggregation == 'add': aggregation = rgnn.AggregationFunction.Add
+    else: raise RuntimeError(f'Unknown aggregation function: {aggregation}.')
+    config = rgnn.RelationalGraphNeuralNetworkConfig(
         domain=domain,
-        aggregation=aggregation,
+        input_specification=(rgnn.InputType.State, rgnn.InputType.Goal),
+        output_specification=[('value', rgnn.OutputNodeType.Objects, rgnn.OutputValueType.Scalar)],
         embedding_size=embedding_size,
         num_layers=num_layers,
-        global_readout=False,
-        normalization=True,
-        random_initialization=False,
-    ).to(device)
+        message_aggregation=aggregation
+    )
+    return rgnn.RelationalGraphNeuralNetwork(config).to(device)
 
 
-def _sample_batch(state_sampler: StateDataset, batch_size: int, device: torch.device) -> tuple[list[mm.State], torch.Tensor]:
-    states: list[mm.State] = []
+def _sample_batch(state_sampler: StateDataset, batch_size: int, device: torch.device) -> tuple[list[tuple[mm.State, mm.GroundConjunctiveCondition]], torch.Tensor]:
+    inputs: list[mm.State] = []
     targets: list[float]  = []
     for _ in range(batch_size):
         state, label = state_sampler.sample()
-        states.append(state)
+        problem = state.get_problem()
+        goal = problem.get_goal_condition()
+        inputs.append((state, goal))
         targets.append(1000.0 if label.is_dead_end else label.steps_to_goal)
-    return states, torch.tensor(targets,  dtype=torch.float, requires_grad=False, device=device)
+    return inputs, torch.tensor(targets,  dtype=torch.float, requires_grad=False, device=device)
 
 
-def _train(model: RelationalGraphNeuralNetwork,
+def _train(model: rgnn.RelationalGraphNeuralNetwork,
            optimizer: optim.Adam,
            train_states: StateDataset,
            validation_states: StateDataset,
@@ -125,9 +132,9 @@ def _train(model: RelationalGraphNeuralNetwork,
     for epoch in range(0, num_epochs):
         # Train step
         for index in range(TRAIN_SIZE):
-            states, targets = _sample_batch(train_states, batch_size, device)
-            predictions = model.forward_value(states)
-            loss = (predictions - targets).abs().mean()
+            inputs, targets = _sample_batch(train_states, batch_size, device)
+            outputs: torch.Tensor = model.forward(inputs).readout('value')
+            loss = (outputs - targets).abs().mean()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -138,9 +145,9 @@ def _train(model: RelationalGraphNeuralNetwork,
         with torch.no_grad():
             error = torch.zeros([1], dtype=torch.float, device=device)
             for index in range(VALIDATION_SIZE):
-                states, targets = _sample_batch(validation_states, batch_size, device)
-                predictions = model.forward_value(states)
-                error += (predictions - targets).abs().sum()
+                inputs, targets = _sample_batch(validation_states, batch_size, device)
+                outputs = model.forward(inputs).readout('value')
+                error += (outputs - targets).abs().sum()
             total_samples = VALIDATION_SIZE * batch_size
             error = error / total_samples
             print(f'[{epoch + 1}/{num_epochs}] Absolute error: {error.item():.4f}')
@@ -164,7 +171,7 @@ def _main(args: argparse.Namespace) -> None:
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     else:
         print(f'Loading an existing model and optimizer... ({args.model})')
-        model, extras = RelationalGraphNeuralNetwork.load(domain, args.model, device)
+        model, extras = rgnn.RelationalGraphNeuralNetwork.load(domain, args.model, device)
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
         optimizer.load_state_dict(extras['optimizer'])
     _train(model, optimizer, train_dataset, validation_dataset, args.num_epochs, args.batch_size, device)

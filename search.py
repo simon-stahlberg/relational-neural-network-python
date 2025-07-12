@@ -1,14 +1,14 @@
 import argparse
 import pymimir as mm
+import pymimir_rgnn as rgnn
 import torch
 
 from pathlib import Path
-from rgnn import RelationalGraphNeuralNetwork
 from utils import create_device
 
 
 class NeuralHeuristic(mm.Heuristic):
-    def __init__(self, model: RelationalGraphNeuralNetwork):
+    def __init__(self, model: rgnn.RelationalGraphNeuralNetwork):
         super().__init__()
         self._model = model
 
@@ -16,7 +16,9 @@ class NeuralHeuristic(mm.Heuristic):
         if is_goal_state: return 0.0
         with torch.no_grad():
             self._model.eval()
-            value = self._model.forward_value([state])[0]
+            problem = state.get_problem()
+            goal = problem.get_goal_condition()
+            value = self._model.forward([(state, goal)]).readout('value')[0]
             return value
 
 
@@ -35,7 +37,7 @@ def _main(args: argparse.Namespace) -> None:
     problem = mm.Problem(domain, args.problem)
     print(f'Loading model... ({args.model})')
     device = create_device()
-    model, _ = RelationalGraphNeuralNetwork.load(domain, args.model, device)
+    model, _ = rgnn.RelationalGraphNeuralNetwork.load(domain, args.model, device)
     initial_state = problem.get_initial_state()
     neural_heuristic = NeuralHeuristic(model)
     # Initialize counters for statistics.

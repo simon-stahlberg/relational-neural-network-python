@@ -1,7 +1,8 @@
 # Relational Neural Network for Classical Planning
 
-This repository implements the relational neural network architecture presented in *Ståhlberg, Bonet, Geffner, ICAPS 2022* (https://ojs.aaai.org/index.php/ICAPS/article/view/19851/19610).
-The implementation is not strictly faithful to the original and includes a few optimizations to reduce training time, such as residual connections.
+This repository is related to the relational neural network architecture presented in *Ståhlberg, Bonet, Geffner, ICAPS 2022* (https://ojs.aaai.org/index.php/ICAPS/article/view/19851/19610).
+The relationship is not strictly faithful to the original and includes a few optimizations to reduce training time, such as residual connections.
+The actual implementation of the architecture is provided by the Python package `pymimir-rgnn` (https://github.com/simon-stahlberg/mimir-rgnn).
 
 The purpose of this repository is to serve as a starting point for developing new approaches and is thus very barebones.
 It contains a very simple training loop without any optimizations like learning rate schedulers, curriculum learning, gradient clipping, and so on.
@@ -10,9 +11,9 @@ Cycle detection is commonly used, but it is not implemented here to keep the cod
 
 ## Dependencies
 
-The two main dependencies are `torch` and `pymimir`, both of which are available via pip.
+The three main dependencies are `torch`, `pymimir` and `pymimir-rgnn`, all of which are available via pip.
 Please see https://pytorch.org/ for instructions on how to install `torch`.
-The `pymimir` package can be installed by running `pip install pymimir`.
+The packages, `pymimir` and `pymimir-rgnn`, can be installed by running `pip install pymimir pymimir-rgnn`.
 
 ## Example
 
