@@ -88,11 +88,11 @@ def _create_datasets(state_space_samplers: list[mm.StateSpaceSampler]) -> tuple[
     return train_dataset, validation_dataset
 
 
-def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, aggregation: str, device: torch.device) -> nn.Module:
-    if aggregation == 'smax': aggregation = rgnn.AggregationFunction.SmoothMaximum
-    elif aggregation == 'hmax': aggregation = rgnn.AggregationFunction.HardMaximum
-    elif aggregation == 'mean': aggregation = rgnn.AggregationFunction.Mean
-    elif aggregation == 'add': aggregation = rgnn.AggregationFunction.Add
+def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, aggregation: str, device: torch.device) -> rgnn.RelationalGraphNeuralNetwork:
+    if aggregation == 'smax': aggregation_type = rgnn.AggregationFunction.SmoothMaximum
+    elif aggregation == 'hmax': aggregation_type = rgnn.AggregationFunction.HardMaximum
+    elif aggregation == 'mean': aggregation_type = rgnn.AggregationFunction.Mean
+    elif aggregation == 'add': aggregation_type = rgnn.AggregationFunction.Add
     else: raise RuntimeError(f'Unknown aggregation function: {aggregation}.')
     config = rgnn.RelationalGraphNeuralNetworkConfig(
         domain=domain,
@@ -100,13 +100,13 @@ def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, aggre
         output_specification=[('value', rgnn.OutputNodeType.Objects, rgnn.OutputValueType.Scalar)],
         embedding_size=embedding_size,
         num_layers=num_layers,
-        message_aggregation=aggregation
+        message_aggregation=aggregation_type
     )
     return rgnn.RelationalGraphNeuralNetwork(config).to(device)
 
 
 def _sample_batch(state_sampler: StateDataset, batch_size: int, device: torch.device) -> tuple[list[tuple[mm.State, mm.GroundConjunctiveCondition]], torch.Tensor]:
-    inputs: list[mm.State] = []
+    inputs: list[tuple[mm.State, mm.GroundConjunctiveCondition]] = []
     targets: list[float]  = []
     for _ in range(batch_size):
         state, label = state_sampler.sample()

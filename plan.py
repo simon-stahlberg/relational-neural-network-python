@@ -29,7 +29,7 @@ def _plan(problem: mm.Problem, model: rgnn.RelationalGraphNeuralNetwork) -> Unio
             values = model.forward(input).readout('value')
             assert isinstance(values, torch.Tensor), 'Model should return a tensor of values.'
             values = values.cpu()  # Move the result to the CPU.
-            min_index = values.argmin().item()
+            min_index = int(values.argmin().item())
             min_value = values[min_index].item()
             selected_action = applicable_actions[min_index]
             selected_successor = input[min_index][0]
