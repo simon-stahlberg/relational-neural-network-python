@@ -1,4 +1,4 @@
 pymimir>=0.13.42
-pymimir-rgnn>=0.1.2
-pymimir-rl>=0.1.6
+pymimir-rgnn>=0.1.3
+pymimir-rl>=0.1.7
 torch>=2.6.0

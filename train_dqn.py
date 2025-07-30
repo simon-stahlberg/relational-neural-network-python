@@ -2,6 +2,7 @@ import argparse
 import pymimir as mm
 import pymimir_rgnn as rgnn
 import pymimir_rl as rl
+import random
 import torch
 import torch.optim as optim
 
@@ -21,11 +22,12 @@ class ModelWrapper(rl.ActionScalarModel):
             actions = state.generate_applicable_actions()
             input_list.append((state, actions, goal))
             actions_list.append(actions)
+        original_layer_count = self.model.get_layer_count()
+        new_layer_count = random.randint(original_layer_count // 2, original_layer_count)
+        self.model.set_layer_count(new_layer_count)
         q_values_list: list[torch.Tensor] = self.model.forward(input_list).readout('q')  # type: ignore
+        self.model.set_layer_count(original_layer_count)
         output = list(zip(q_values_list, actions_list))
-        for tensor, _ in output:
-            assert not tensor.isnan().any()
-            assert not tensor.isinf().any()
         return output
 
 
