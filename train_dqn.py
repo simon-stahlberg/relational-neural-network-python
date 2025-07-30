@@ -9,7 +9,7 @@ from pathlib import Path
 from utils import create_device
 
 
-class ModelWrapper(rl.QValueModel):
+class ModelWrapper(rl.ActionScalarModel):
     def __init__(self, model: rgnn.RelationalGraphNeuralNetwork) -> None:
         super().__init__()
         self.model = model
@@ -97,16 +97,15 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
            args: argparse.Namespace,
            device: torch.device):
     wrapped_model = ModelWrapper(model).to(device)
-    loss_function = rl.DQNLossFunction(wrapped_model, args.discount_factor, 10.0)
+    loss_function = rl.DQNLossFunction(wrapped_model, wrapped_model, args.discount_factor, 10.0)
     reward_function = rl.ConstantRewardFunction(-1)
     replay_buffer = rl.PrioritizedReplayBuffer(args.max_buffer_size)
-    trajectory_sampler = rl.BoltzmannTrajectorySampler(1.0)
+    trajectory_sampler = rl.BoltzmannTrajectorySampler(wrapped_model, reward_function, args.bt_initial)
     problem_sampler = rl.UniformProblemSampler()
     initial_state_sampler = rl.OriginalInitialStateSampler()
     goal_sampler = rl.OriginalGoalConditionSampler()
     trajectory_refiner = rl.LiftedHindsightTrajectoryRefiner(train_problems, args.max_new_trajectories)
     rl_algorithm = rl.OffPolicyAlgorithm(train_problems,
-                                         wrapped_model,
                                          optimizer,
                                          lr_scheduler,
                                          loss_function,
@@ -122,8 +121,8 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
                                          goal_sampler,
                                          trajectory_refiner)
     evaluation_criteras = [rl.CoverageCriteria(), rl.SolutionLengthCriteria()]
-    evaluation_trajectory_sampler = rl.GreedyPolicyTrajectorySampler()
-    rl_evaluator = rl.PolicyEvaluation(validation_problems, evaluation_criteras, evaluation_trajectory_sampler, reward_function, args.validation_horizon)
+    evaluation_trajectory_sampler = rl.GreedyPolicyTrajectorySampler(wrapped_model, reward_function)
+    rl_evaluator = rl.PolicyEvaluation(validation_problems, evaluation_criteras, evaluation_trajectory_sampler, args.validation_horizon)
     episode = 0
     def avg_num_objects(ps: list[mm.Problem]) -> float:
         return sum(len(p.get_objects()) for p in ps) / len(ps)
@@ -139,7 +138,7 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
     rl_algorithm.register_refine_trajectories(lambda ts: print(f'[{episode}] > Refined Trajectories; {avg_goal_size(ts):.1f} avg. goal size; {avg_trajectory_length(ts):.1f} avg. trajectory length.', flush=True))
     rl_algorithm.register_post_collect_experience(lambda: print(f'[{episode}] Collected Experience.', flush=True))
     rl_algorithm.register_pre_optimize_model(lambda: print(f'[{episode}] Optimizing Model.', flush=True))
-    rl_algorithm.register_train_step(lambda ts, l1, l2, l3: print(f'[{episode}] > Train step: {l1.mean().item():.5f} avg. prediction; {l2.mean().item():.5f} avg. TD-error; {l3.mean().item():.5f} avg. bounds error.'))
+    rl_algorithm.register_train_step(lambda ts, loss: print(f'[{episode}] > Train step: {loss.mean().item():.5f} avg. loss.'))
     rl_algorithm.register_post_optimize_model(lambda: print(f'[{episode}] Optimized Model.', flush=True))
     while True:
         # Update Boltzmann temperature.
@@ -150,7 +149,7 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
         # Run RL algorithm.
         rl_algorithm.fit()
         # Evaluate every now and then.
-        best, evaluation = rl_evaluator.evaluate(wrapped_model)
+        best, evaluation = rl_evaluator.evaluate()
         print(f'[{episode}] Best: {best}, Evaluation: {evaluation}', flush=True)
         # Increment episode.
         episode += 1
