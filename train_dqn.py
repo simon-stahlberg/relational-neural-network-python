@@ -122,7 +122,7 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
                                          initial_state_sampler,
                                          goal_sampler,
                                          trajectory_refiner)
-    evaluation_criteras = [rl.CoverageCriteria(), rl.SolutionLengthCriteria()]
+    evaluation_criteras = [rl.CoverageCriteria(), rl.LengthCriteria()]
     evaluation_trajectory_sampler = rl.GreedyPolicyTrajectorySampler(wrapped_model, reward_function)
     rl_evaluator = rl.PolicyEvaluation(validation_problems, evaluation_criteras, evaluation_trajectory_sampler, args.validation_horizon)
     episode = 0
