@@ -94,15 +94,15 @@ def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, aggre
     elif aggregation == 'mean': aggregation_type = rgnn.AggregationFunction.Mean
     elif aggregation == 'add': aggregation_type = rgnn.AggregationFunction.Add
     else: raise RuntimeError(f'Unknown aggregation function: {aggregation}.')
-    config = rgnn.RelationalGraphNeuralNetworkConfig(
+    config = rgnn.HyperparameterConfig(
         domain=domain,
-        input_specification=(rgnn.InputType.State, rgnn.InputType.Goal),
-        output_specification=[('value', rgnn.OutputNodeType.Objects, rgnn.OutputValueType.Scalar)],
         embedding_size=embedding_size,
         num_layers=num_layers,
         message_aggregation=aggregation_type
     )
-    return rgnn.RelationalGraphNeuralNetwork(config).to(device)
+    input_spec=(rgnn.StateEncoder(), rgnn.GoalEncoder())
+    output_spec=[('value', rgnn.ObjectsScalarDecoder(config))]
+    return rgnn.RelationalGraphNeuralNetwork(config, input_spec, output_spec).to(device)  # type: ignore
 
 
 def _sample_batch(state_sampler: StateDataset, batch_size: int, device: torch.device) -> tuple[list[tuple[mm.State, mm.GroundConjunctiveCondition]], torch.Tensor]:
@@ -160,7 +160,7 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
 
 def _main(args: argparse.Namespace) -> None:
     print(f'Torch: {torch.__version__}')
-    device = create_device()
+    device = create_device(False)
     domain_path, problem_paths = _get_instance_paths(args.input)
     domain, problems = _parse_instances(domain_path, problem_paths)
     state_spaces = _generate_state_spaces(problems, args.seed)
