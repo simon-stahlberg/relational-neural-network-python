@@ -43,7 +43,7 @@ def _main(args: argparse.Namespace) -> None:
     print(f'Torch: {torch.__version__}')
     domain = mm.Domain(args.domain)
     problem = mm.Problem(domain, args.problem)
-    model, _ = rgnn.RelationalGraphNeuralNetwork.load(domain, args.model, create_device())
+    model, _ = rgnn.RelationalGraphNeuralNetwork.load(domain, args.model, create_device(False))
     solution = _plan(problem, model)
     if solution is None:
         print('Failed to find a solution!')
