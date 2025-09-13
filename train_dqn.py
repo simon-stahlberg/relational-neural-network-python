@@ -80,15 +80,15 @@ def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, aggre
     elif aggregation == 'mean': aggregation_type = rgnn.AggregationFunction.Mean
     elif aggregation == 'add': aggregation_type = rgnn.AggregationFunction.Add
     else: raise RuntimeError(f'Unknown aggregation function: {aggregation}.')
-    config = rgnn.RelationalGraphNeuralNetworkConfig(
+    config = rgnn.HyperparameterConfig(
         domain=domain,
-        input_specification=(rgnn.InputType.State, rgnn.InputType.GroundActions, rgnn.InputType.Goal),
-        output_specification=[('q', rgnn.OutputNodeType.Action, rgnn.OutputValueType.Scalar)],
         embedding_size=embedding_size,
         num_layers=num_layers,
         message_aggregation=aggregation_type
     )
-    return rgnn.RelationalGraphNeuralNetwork(config)
+    input_spec = (rgnn.StateEncoder(), rgnn.GroundActionsEncoder(), rgnn.GoalEncoder())
+    output_spec = [('q', rgnn.ActionScalarDecoder(config))]
+    return rgnn.RelationalGraphNeuralNetwork(config, input_spec, output_spec)  # type: ignore
 
 
 def _train(model: rgnn.RelationalGraphNeuralNetwork,
@@ -99,7 +99,7 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
            args: argparse.Namespace,
            device: torch.device):
     wrapped_model = ModelWrapper(model).to(device)
-    loss_function = rl.DQNLossFunction(wrapped_model, wrapped_model, args.discount_factor, 10.0)
+    loss_function = rl.DQNOptimization(wrapped_model, optimizer, lr_scheduler, wrapped_model, args.discount_factor, 10.0, True)
     reward_function = rl.ConstantRewardFunction(-1)
     replay_buffer = rl.PrioritizedReplayBuffer(args.max_buffer_size)
     trajectory_sampler = rl.BoltzmannTrajectorySampler(wrapped_model, reward_function, args.bt_initial)
@@ -108,8 +108,6 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
     goal_sampler = rl.OriginalGoalConditionSampler()
     trajectory_refiner = rl.LiftedHindsightTrajectoryRefiner(train_problems, args.max_new_trajectories)
     rl_algorithm = rl.OffPolicyAlgorithm(train_problems,
-                                         optimizer,
-                                         lr_scheduler,
                                          loss_function,
                                          reward_function,
                                          replay_buffer,
@@ -132,16 +130,16 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
         return sum(len(t[0].goal_condition) for t in ts if len(t) > 0) / len(ts)
     def avg_trajectory_length(ts: list[rl.Trajectory]) -> float:
         return sum(len(t) for t in ts if len(t) > 0) / len(ts)
-    rl_algorithm.register_pre_collect_experience(lambda: print(f'[{episode}] Collecting Experience.', flush=True))
-    rl_algorithm.register_sample_problems(lambda ps: print(f'[{episode}] > Sampled Problems; {avg_num_objects(ps):.1f} avg. object count.', flush=True))
-    rl_algorithm.register_sample_initial_states(lambda x: print(f'[{episode}] > Sampled Initial States.', flush=True))
-    rl_algorithm.register_sample_goal_conditions(lambda x: print(f'[{episode}] > Sampled Goals.', flush=True))
-    rl_algorithm.register_sample_trajectories(lambda ts: print(f'[{episode}] > Sampled Trajectories; {avg_goal_size(ts):.1f} avg. goal size; {avg_trajectory_length(ts):.1f} avg. trajectory length', flush=True))
-    rl_algorithm.register_refine_trajectories(lambda ts: print(f'[{episode}] > Refined Trajectories; {avg_goal_size(ts):.1f} avg. goal size; {avg_trajectory_length(ts):.1f} avg. trajectory length.', flush=True))
-    rl_algorithm.register_post_collect_experience(lambda: print(f'[{episode}] Collected Experience.', flush=True))
-    rl_algorithm.register_pre_optimize_model(lambda: print(f'[{episode}] Optimizing Model.', flush=True))
-    rl_algorithm.register_train_step(lambda ts, loss: print(f'[{episode}] > Train step: {loss.mean().item():.5f} avg. loss.'))
-    rl_algorithm.register_post_optimize_model(lambda: print(f'[{episode}] Optimized Model.', flush=True))
+    rl_algorithm.register_on_pre_collect_experience(lambda: print(f'[{episode}] Collecting Experience.', flush=True))
+    rl_algorithm.register_on_sample_problems(lambda ps: print(f'[{episode}] > Sampled Problems; {avg_num_objects(ps):.1f} avg. object count.', flush=True))
+    rl_algorithm.register_on_sample_initial_states(lambda x: print(f'[{episode}] > Sampled Initial States.', flush=True))
+    rl_algorithm.register_on_sample_goal_conditions(lambda x: print(f'[{episode}] > Sampled Goals.', flush=True))
+    rl_algorithm.register_on_sample_trajectories(lambda ts: print(f'[{episode}] > Sampled Trajectories; {avg_goal_size(ts):.1f} avg. goal size; {avg_trajectory_length(ts):.1f} avg. trajectory length', flush=True))
+    rl_algorithm.register_on_refine_trajectories(lambda ts: print(f'[{episode}] > Refined Trajectories; {avg_goal_size(ts):.1f} avg. goal size; {avg_trajectory_length(ts):.1f} avg. trajectory length.', flush=True))
+    rl_algorithm.register_on_post_collect_experience(lambda: print(f'[{episode}] Collected Experience.', flush=True))
+    rl_algorithm.register_on_pre_optimize_model(lambda: print(f'[{episode}] Optimizing Model.', flush=True))
+    rl_algorithm.register_on_train_step(lambda ts, loss: print(f'[{episode}] > Train step: {loss.mean().item():.5f} avg. loss.'))
+    rl_algorithm.register_on_post_optimize_model(lambda: print(f'[{episode}] Optimized Model.', flush=True))
     while True:
         # Update Boltzmann temperature.
         bt_ratio = min(1.0, episode / args.bt_steps)
