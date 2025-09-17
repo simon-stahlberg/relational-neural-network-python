@@ -1,4 +1,6 @@
 import argparse
+from queue import Queue
+import threading
 import pymimir as mm
 import pymimir_rgnn as rgnn
 import random
@@ -8,6 +10,7 @@ import torch.optim as optim
 
 from pathlib import Path
 from utils import create_device
+import time
 
 
 class StateDataset:
@@ -89,20 +92,28 @@ def _create_datasets(state_space_samplers: list[mm.StateSpaceSampler]) -> tuple[
 
 
 def _create_model(domain: mm.Domain, embedding_size: int, num_layers: int, aggregation: str, device: torch.device) -> rgnn.RelationalGraphNeuralNetwork:
-    if aggregation == 'smax': aggregation_type = rgnn.AggregationFunction.SmoothMaximum
-    elif aggregation == 'hmax': aggregation_type = rgnn.AggregationFunction.HardMaximum
-    elif aggregation == 'mean': aggregation_type = rgnn.AggregationFunction.Mean
-    elif aggregation == 'add': aggregation_type = rgnn.AggregationFunction.Add
+    if aggregation == 'smax': aggregation_function = rgnn.SmoothMaximumAggregation()
+    elif aggregation == 'hmax': aggregation_function = rgnn.HardMaximumAggregation()
+    elif aggregation == 'mean': aggregation_function = rgnn.MeanAggregation()
+    elif aggregation == 'add': aggregation_function = rgnn.SumAggregation()
     else: raise RuntimeError(f'Unknown aggregation function: {aggregation}.')
-    config = rgnn.HyperparameterConfig(
+
+    hparam_config = rgnn.HyperparameterConfig(
         domain=domain,
         embedding_size=embedding_size,
-        num_layers=num_layers,
-        message_aggregation=aggregation_type
+        num_layers=num_layers
     )
+
     input_spec=(rgnn.StateEncoder(), rgnn.GoalEncoder())
-    output_spec=[('value', rgnn.ObjectsScalarDecoder(config))]
-    return rgnn.RelationalGraphNeuralNetwork(config, input_spec, output_spec).to(device)  # type: ignore
+    output_spec=[('value', rgnn.ObjectsScalarDecoder(hparam_config))]
+
+    module_config = rgnn.ModuleConfig(
+        aggregation_function=aggregation_function,
+        message_function=rgnn.PredicateMLPMessages(hparam_config, input_spec),
+        update_function=rgnn.MLPUpdates(hparam_config)
+    )
+
+    return rgnn.RelationalGraphNeuralNetwork(hparam_config, module_config, input_spec, output_spec).to(device)  # type: ignore
 
 
 def _sample_batch(state_sampler: StateDataset, batch_size: int, device: torch.device) -> tuple[list[tuple[mm.State, mm.GroundConjunctiveCondition]], torch.Tensor]:
@@ -130,6 +141,7 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
     best_error = None  # Track the best validation loss to detect overfitting.
     print('Training model...')
     for epoch in range(0, num_epochs):
+        last_print_time = time.time()
         # Train step
         for index in range(TRAIN_SIZE):
             inputs, targets = _sample_batch(train_states, batch_size, device)
@@ -140,7 +152,10 @@ def _train(model: rgnn.RelationalGraphNeuralNetwork,
             optimizer.step()
             # Print loss every 100 steps (printing every step forces synchronization with CPU)
             if (index + 1) % 100 == 0:
-                print(f'[{epoch + 1}/{num_epochs}; {index + 1}/{TRAIN_SIZE}] Loss: {loss.item():.4f}')
+                current_time = time.time()
+                elapsed = current_time - last_print_time
+                print(f'[{epoch + 1}/{num_epochs}; {index + 1}/{TRAIN_SIZE}] Loss: {loss.item():.4f} ({elapsed:.2f} seconds)')
+                last_print_time = current_time
         # Validation step
         with torch.no_grad():
             error = torch.zeros([1], dtype=torch.float, device=device)
