@@ -1,11 +1,8 @@
 import argparse
-from queue import Queue
-import threading
 import pymimir as mm
 import pymimir_rgnn as rgnn
 import random
 import torch
-import torch.nn as nn
 import torch.optim as optim
 
 from pathlib import Path
